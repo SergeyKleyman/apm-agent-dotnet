@@ -193,6 +193,46 @@ namespace Elastic.Apm.Tests.Mocks
 
 			timer.FastForward(t1 + t2 + t3);
 		}
+
+		[Fact]
+		public void Delay_with_relativeToInstant_in_the_past()
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+
+			var t1 = 7.Seconds();
+			var t2 = 11.Seconds();
+			var timeToWait = t1 + t2;
+
+			// We take time instant at the start of a "atomic" calculation
+			var now = timer.Now;
+			// Let's assume there's a long calculation that takes some time
+			timer.FastForward(t1);
+			// and the conclusion of the calculation that we need to delay for timeToWait
+			// (relative to `now` time instant)
+			var delayTask = timer.Delay(now, timeToWait);
+			delayTask.IsCompleted.Should().BeFalse();
+
+			timer.FastForward(t2);
+
+			delayTask.IsCompleted.Should().BeTrue();
+		}
+
+		[Fact]
+		public void Delay_with_target_time_is_already_in_the_past()
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+
+			var timeToWait = 3.Seconds();
+
+			// We take time instant at the start of a "atomic" calculation
+			var now = timer.Now;
+			// Let's assume there's a long calculation that takes some time
+			timer.FastForward(timeToWait + 5.Seconds());
+			// and the conclusion of the calculation that we need to delay for timeToWait
+			// (relative to `now` time instant)
+			var delayTask = timer.Delay(now, timeToWait);
+			delayTask.IsCompleted.Should().BeTrue();
+		}
 	}
 
 	internal static class MockAgentTimerTestsExtensions
