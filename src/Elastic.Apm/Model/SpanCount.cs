@@ -1,6 +1,4 @@
-using System;
 using System.Threading;
-using Elastic.Apm.Api;
 using Elastic.Apm.Helpers;
 
 namespace Elastic.Apm.Model
@@ -17,6 +15,6 @@ namespace Elastic.Apm.Model
 		public void IncrementDropped() => Interlocked.Increment(ref _dropped);
 
 		public override string ToString() =>
-			new ToStringBuilder(nameof(SpanCount)) { { nameof(Started), Started }, { nameof(Dropped), Dropped }, }.ToString();
+			new ToStringBuilder(nameof(SpanCount)) { { nameof(Started), Started }, { nameof(Dropped), Dropped } }.ToString();
 	}
 }

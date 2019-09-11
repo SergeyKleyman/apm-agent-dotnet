@@ -490,9 +490,8 @@ namespace Elastic.Apm.Tests
 		[Fact]
 		public void SpanFramesMinDurationDefaultValuesInSync()
 		{
-			Environment.SetEnvironmentVariable(EnvVarNames.MetricsInterval, DefaultValues.SpanFramesMinDuration);
-			var testLogger = new TestLogger();
-			var config = new EnvironmentConfigurationReader(testLogger);
+			Environment.SetEnvironmentVariable(EnvVarNames.SpanFramesMinDuration, DefaultValues.SpanFramesMinDuration);
+			var config = new EnvironmentConfigurationReader(new NoopLogger());
 			config.SpanFramesMinDurationInMilliseconds.Should().Be(DefaultValues.SpanFramesMinDurationInMilliseconds);
 		}
 
@@ -526,6 +525,89 @@ namespace Elastic.Apm.Tests
 				new ApmAgent(new TestAgentComponents(
 					configurationReader: new TestAgentConfigurationReader(spanFramesMinDurationInMilliseconds: configValue))))
 				agent.ConfigurationReader.SpanFramesMinDurationInMilliseconds.Should().Be(expectedValue);
+		}
+
+		[InlineData("123ms", 123)]
+		[InlineData("976s", 976 * 1000)]
+		[InlineData("2m", 2 * 60 * 1000)]
+		[InlineData("567", 567 * 1000)]
+		[InlineData("0", 0)]
+		[InlineData("0s", 0)]
+		[InlineData("0ms", 0)]
+		[InlineData("-3ms", DefaultValues.FlushIntervalInMilliseconds)]
+		[InlineData("-1", DefaultValues.FlushIntervalInMilliseconds)]
+		[InlineData("dsfkldfs", DefaultValues.FlushIntervalInMilliseconds)]
+		[InlineData("2,32", DefaultValues.FlushIntervalInMilliseconds)]
+		[InlineData("785zz", DefaultValues.FlushIntervalInMilliseconds)]
+		[Theory]
+		public void FlushInterval_tests(string configValue, int expectedValueInMilliseconds)
+		{
+			using (var agent =
+				new ApmAgent(new TestAgentComponents(
+					configurationReader: new TestAgentConfigurationReader(flushInterval: configValue))))
+				agent.ConfigurationReader.FlushInterval.Should().Be(TimeSpan.FromMilliseconds(expectedValueInMilliseconds));
+		}
+
+		[InlineData("123ms", 123)]
+		[InlineData("976s", 976 * 1000)]
+		[InlineData("2m", 2 * 60 * 1000)]
+		[InlineData("567", 567 * 1000)]
+		[InlineData("0", 0)]
+		[InlineData("0s", 0)]
+		[InlineData("0ms", 0)]
+		[InlineData("-3ms", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[InlineData("-1", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[InlineData("0aefjw", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[InlineData("aefjw9", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[InlineData("2,32", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[InlineData("785zz", DefaultValues.DiscardEventAgeInMilliseconds)]
+		[Theory]
+		public void DiscardEventAge_tests(string configValue, int expectedValueInMilliseconds)
+		{
+			using (var agent =
+				new ApmAgent(new TestAgentComponents(
+					configurationReader: new TestAgentConfigurationReader(discardEventAge: configValue))))
+				agent.ConfigurationReader.DiscardEventAge.Should().Be(TimeSpan.FromMilliseconds(expectedValueInMilliseconds));
+		}
+
+		[InlineData("1", 1)]
+		[InlineData("23", 23)]
+		[InlineData("654", 654)]
+		[InlineData("0", DefaultValues.MaxQueueEventCount)]
+		[InlineData("-1", DefaultValues.MaxQueueEventCount)]
+		[InlineData("-23", DefaultValues.MaxQueueEventCount)]
+		[InlineData("-654", DefaultValues.MaxQueueEventCount)]
+		[InlineData("0aefjw", DefaultValues.MaxQueueEventCount)]
+		[InlineData("aefjw9", DefaultValues.MaxQueueEventCount)]
+		[InlineData("2,32", DefaultValues.MaxQueueEventCount)]
+		[InlineData("2.32", DefaultValues.MaxQueueEventCount)]
+		[Theory]
+		public void MaxQueueEventCount_tests(string configValue, int expectedValue)
+		{
+			using (var agent =
+				new ApmAgent(new TestAgentComponents(
+					configurationReader: new TestAgentConfigurationReader(maxQueueEventCount: configValue))))
+				agent.ConfigurationReader.MaxQueueEventCount.Should().Be(expectedValue);
+		}
+
+		[InlineData("1", 1)]
+		[InlineData("23", 23)]
+		[InlineData("654", 654)]
+		[InlineData("0", DefaultValues.MaxBatchEventCount)]
+		[InlineData("-1", DefaultValues.MaxBatchEventCount)]
+		[InlineData("-23", DefaultValues.MaxBatchEventCount)]
+		[InlineData("-654", DefaultValues.MaxBatchEventCount)]
+		[InlineData("0aefjw", DefaultValues.MaxBatchEventCount)]
+		[InlineData("aefjw9", DefaultValues.MaxBatchEventCount)]
+		[InlineData("2,32", DefaultValues.MaxBatchEventCount)]
+		[InlineData("2.32", DefaultValues.MaxBatchEventCount)]
+		[Theory]
+		public void MaxBatchEventCount_tests(string configValue, int expectedValue)
+		{
+			using (var agent =
+				new ApmAgent(new TestAgentComponents(
+					configurationReader: new TestAgentConfigurationReader(maxBatchEventCount: configValue))))
+				agent.ConfigurationReader.MaxBatchEventCount.Should().Be(expectedValue);
 		}
 
 		private static double MetricsIntervalTestCommon(string configValue)

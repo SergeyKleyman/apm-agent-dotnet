@@ -10,6 +10,7 @@
     <DelaySign>false</DelaySign>
     <!-- Always generate debug symbols this allows fluent symbols exception messages to include variable names -->
     <DebugSymbols>True</DebugSymbols>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,7 +25,6 @@
     <ProjectReference Include="..\..\src\Elastic.Apm\Elastic.Apm.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="HelpersTests" />
     <Folder Include="Mocks\" />
     <Folder Include="ApiTests\" />
   </ItemGroup>

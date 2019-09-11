@@ -23,6 +23,10 @@ namespace Elastic.Apm.Config
 			public static Uri ServerUri => new Uri($"http://localhost:{ApmServerPort}");
 			public const string CaptureBody = SupportedValues.CaptureBodyOff;
 			public const string CaptureBodyContentTypes = "application/x-www-form-urlencoded*, text/*, application/json*, application/xml*";
+			public const int MaxQueueEventCount = 1000;
+			public const int MaxBatchEventCount = 10;
+			public const int FlushIntervalInMilliseconds = 1_000; // 1 second
+			public const int DiscardEventAgeInMilliseconds = 30_000; // 30 seconds
 		}
 
 		public static class EnvVarNames
@@ -41,6 +45,10 @@ namespace Elastic.Apm.Config
 			public const string TransactionSampleRate = Prefix + "TRANSACTION_SAMPLE_RATE";
 			public const string CaptureBody = Prefix + "CAPTURE_BODY";
 			public const string CaptureBodyContentTypes = Prefix + "CAPTURE_BODY_CONTENT_TYPES";
+			public const string MaxQueueEventCount = Prefix + "MAX_QUEUE_EVENT_COUNT";
+			public const string MaxBatchEventCount = Prefix + "MAX_BATCH_EVENT_COUNT";
+			public const string FlushInterval = Prefix + "FLUSH_INTERVAL";
+			public const string DiscardEventAge = Prefix + "DISCARD_EVENT_AGE";
 		}
 
 		public static class SupportedValues

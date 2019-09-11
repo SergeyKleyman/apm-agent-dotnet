@@ -1,3 +1,5 @@
+using System;
+
 namespace Elastic.Apm.Helpers
 {
 	/// <summary>
@@ -10,9 +12,42 @@ namespace Elastic.Apm.Helpers
 	{
 		private static readonly AssertIfEnabled SingletonAssertIfEnabled = new AssertIfEnabled();
 
-		internal static AssertIfEnabled? IfEnabled => IsEnabled ? SingletonAssertIfEnabled : (AssertIfEnabled?)null;
+		private const AssertionLevel DefaultLevel = AssertionLevel.O1;
 
-		internal static bool IsEnabled { get; set; } = true;
+		private static readonly Impl ImplSingleton = new Impl(DefaultLevel);
+
+		internal class Impl
+		{
+			internal Impl(AssertionLevel initialLevel) => Level = initialLevel;
+
+			internal AssertIfEnabled? IfEnabled => IsEnabled ? SingletonAssertIfEnabled : (AssertIfEnabled?)null;
+
+			internal AssertIfEnabled? IfOnLevelEnabled => IsOnLevelEnabled ? SingletonAssertIfEnabled : (AssertIfEnabled?)null;
+
+			internal AssertionLevel Level { get; set; }
+
+			internal bool IsEnabled => Level >= AssertionLevel.O1;
+
+			internal bool IsOnLevelEnabled => Level >= AssertionLevel.On;
+
+			internal void DoIfEnabled(Action<AssertIfEnabled> doAction)
+			{
+				if (IsEnabled) doAction(SingletonAssertIfEnabled);
+			}
+
+			internal void DoIfOnLevelEnabled(Action<AssertIfEnabled> doAction)
+			{
+				if (IsOnLevelEnabled) doAction(SingletonAssertIfEnabled);
+			}
+		}
+
+		internal static AssertIfEnabled? IfEnabled => ImplSingleton.IfEnabled;
+
+		internal static AssertIfEnabled? IfOnLevelEnabled => ImplSingleton.IfOnLevelEnabled;
+
+		internal static bool IsEnabled => ImplSingleton.IsEnabled;
+
+		internal static bool IsOnLevelEnabled => ImplSingleton.IsOnLevelEnabled;
 
 		internal struct AssertIfEnabled
 		{
@@ -21,5 +56,9 @@ namespace Elastic.Apm.Helpers
 				if (!condition) throw new AssertionFailedException(message);
 			}
 		}
+
+		internal static void DoIfEnabled(Action<AssertIfEnabled> doAction) => ImplSingleton.DoIfEnabled(doAction);
+
+		internal static void DoIfOnLevelEnabled(Action<AssertIfEnabled> doAction) => ImplSingleton.DoIfOnLevelEnabled(doAction);
 	}
 }

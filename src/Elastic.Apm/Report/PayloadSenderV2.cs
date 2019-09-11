@@ -1,21 +1,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Reflection;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Threading.Tasks.Dataflow;
 using Elastic.Apm.Api;
 using Elastic.Apm.Config;
+using Elastic.Apm.Helpers;
 using Elastic.Apm.Logging;
-using Elastic.Apm.Model;
-using Elastic.Apm.Report.Serialization;
 
 namespace Elastic.Apm.Report
 {
@@ -25,227 +17,516 @@ namespace Elastic.Apm.Report
 	/// </summary>
 	internal class PayloadSenderV2 : IPayloadSender, IDisposable
 	{
-		private static readonly int DnsTimeout = (int)TimeSpan.FromMinutes(1).TotalMilliseconds;
+		internal const string ThreadName = "ElasticApmPayloadSender";
 
-		private readonly BatchBlock<object> _eventQueue =
-			new BatchBlock<object>(20);
+		internal readonly Api.System System;
 
-		private readonly HttpClient _httpClient;
+		private readonly IBatchSender _batchSender;
+
+		private readonly CancellationTokenSource _cancellationTokenSource;
+
+		private readonly EventsQueue _eventsQueue;
+
+		private readonly AgentSpinLock _isDisposeStarted = new AgentSpinLock();
+
 		private readonly IApmLogger _logger;
 
-		private readonly Service _service;
-		internal readonly Api.System _system;
+		private readonly int _maxBatchEventCount;
 
-		private CancellationTokenSource _batchBlockReceiveAsyncCts;
+		private readonly SingleThreadTaskScheduler _singleThreadTaskScheduler;
 
-		private readonly PayloadItemSerializer _payloadItemSerializer = new PayloadItemSerializer();
-
-		private readonly SingleThreadTaskScheduler _singleThreadTaskScheduler = new SingleThreadTaskScheduler(CancellationToken.None);
-		private readonly Metadata _metadata;
-
-		public PayloadSenderV2(IApmLogger logger, IConfigurationReader configurationReader, Service service, Api.System system,
-			HttpMessageHandler handler = null
+		internal PayloadSenderV2(IApmLogger logger, IConfigurationReader configurationReader, Service service, Api.System system,
+			IBatchSender batchSender = null, IAgentTimer agentTimer = null
 		)
 		{
-			_service = service;
-			_system = system;
-			_metadata = new Metadata { Service = _service, System = _system };
 			_logger = logger?.Scoped(nameof(PayloadSenderV2));
 
-			var serverUrlBase = configurationReader.ServerUrls.First();
-			var servicePoint = ServicePointManager.FindServicePoint(serverUrlBase);
+			System = system;
 
-			servicePoint.ConnectionLeaseTimeout = DnsTimeout;
-			servicePoint.ConnectionLimit = 20;
+			_cancellationTokenSource = new CancellationTokenSource();
+			_singleThreadTaskScheduler = new SingleThreadTaskScheduler(logger, _cancellationTokenSource.Token);
 
-			_httpClient = new HttpClient(handler ?? new HttpClientHandler()) { BaseAddress = serverUrlBase };
-			_httpClient.DefaultRequestHeaders.UserAgent.Add(
-				new ProductInfoHeaderValue($"elasticapm-{Consts.AgentName}", AdaptUserAgentValue(_service.Agent.Version)));
-			_httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("System.Net.Http",
-				AdaptUserAgentValue(typeof(HttpClient).Assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version)));
-			_httpClient.DefaultRequestHeaders.UserAgent.Add(
-				new ProductInfoHeaderValue(AdaptUserAgentValue(_service.Runtime.Name), AdaptUserAgentValue(_service.Runtime.Version)));
-
-			if (configurationReader.SecretToken != null)
+			_maxBatchEventCount = configurationReader.MaxBatchEventCount;
+			var maxQueueEventCount = configurationReader.MaxQueueEventCount;
+			if (maxQueueEventCount < _maxBatchEventCount)
 			{
-				_httpClient.DefaultRequestHeaders.Authorization =
-					new AuthenticationHeaderValue("Bearer", configurationReader.SecretToken);
+				_logger?.Error()
+					?.Log(
+						"MaxQueueEventCount is less than MaxBatchEventCount - using MaxBatchEventCount as MaxQueueEventCount."
+						+ " MaxQueueEventCount: {MaxQueueEventCount}."
+						+ " MaxBatchEventCount: {MaxBatchEventCount}.",
+						configurationReader.MaxQueueEventCount, configurationReader.MaxBatchEventCount);
+
+				maxQueueEventCount = _maxBatchEventCount;
 			}
+			_eventsQueue = new EventsQueue(logger, maxQueueEventCount, configurationReader.DiscardEventAge,
+				_maxBatchEventCount, configurationReader.FlushInterval, agentTimer ?? new AgentTimer());
+
+			_batchSender = batchSender ?? new BatchSender(logger, configurationReader, service, system);
+
 			Task.Factory.StartNew(
 				() =>
 				{
-					try
-					{
 #pragma warning disable 4014
-						DoWork();
+					DoWork();
 #pragma warning restore 4014
-					}
-					catch (TaskCanceledException ex)
-					{
-						_logger?.Debug()?.LogExceptionWithCaller(ex);
-					}
-				}, CancellationToken.None, TaskCreationOptions.LongRunning, _singleThreadTaskScheduler);
-
-			// Replace invalid characters by underscore. All invalid characters can be found at
-			// https://github.com/dotnet/corefx/blob/e64cac6dcacf996f98f0b3f75fb7ad0c12f588f7/src/System.Net.Http/src/System/Net/Http/HttpRuleParser.cs#L41
-			string AdaptUserAgentValue(string value) => Regex.Replace(value, "[ /()<>@,:;={}?\\[\\]\"\\\\]", "_");
+				}, _cancellationTokenSource.Token, TaskCreationOptions.LongRunning, _singleThreadTaskScheduler);
 		}
 
-		public void QueueTransaction(ITransaction transaction)
-		{
-			var res = _eventQueue.Post(transaction);
-			_logger.Debug()
-				?.Log(!res
-					? "Failed adding Transaction to the queue, {Transaction}"
-					: "Transaction added to the queue, {Transaction}", transaction);
+		internal Thread Thread => _singleThreadTaskScheduler.Thread;
 
-			_eventQueue.TriggerBatch();
-		}
+		public void QueueTransaction(ITransaction transaction) => QueueEvent(transaction, transaction.Id, "Transaction");
 
-		public void QueueSpan(ISpan span)
-		{
-			var res = _eventQueue.Post(span);
-			_logger.Debug()
-				?.Log(!res
-					? "Failed adding Span to the queue, {Span}"
-					: "Span added to the queue, {Span}", span);
-		}
+		public void QueueSpan(ISpan span) => QueueEvent(span, span.Id, "Span");
 
-		public void QueueMetrics(IMetricSet metricSet)
-		{
-			var res = _eventQueue.Post(metricSet);
-			_logger.Debug()
-				?.Log(!res
-					? "Failed adding MetricSet to the queue, {MetricSet}"
-					: "MetricSet added to the queue, {MetricSet}", metricSet);
-		}
+		public void QueueMetrics(IMetricSet metricSet) => QueueEvent(metricSet, TimeUtils.FormatTimestampForLog(metricSet.TimeStamp), "MetricSet");
 
-		public void QueueError(IError error)
+		public void QueueError(IError error) => QueueEvent(error, error.Id, "Error");
+
+		private void QueueEvent(object eventObj, string dbgEventObjId, string dbgEventKind)
 		{
-			var res = _eventQueue.Post(error);
-			_logger.Debug()
-				?.Log(!res
-					? "Failed adding Error to the queue, {Error}"
-					: "Error added to the queue, {Error}", error);
+			ThrowIfDisposed();
+
+			_eventsQueue.Enqueue(eventObj, dbgEventObjId, dbgEventKind);
 		}
 
 		private async Task DoWork()
 		{
-			_batchBlockReceiveAsyncCts = new CancellationTokenSource();
+			var batchToSend = new List<object>( /* capacity: */ _maxBatchEventCount);
 			while (true)
 			{
-				var queueItems = await _eventQueue.ReceiveAsync(_batchBlockReceiveAsyncCts.Token);
-				await ProcessQueueItems(queueItems);
+				await _eventsQueue.ReceiveAsync(batchToSend, _cancellationTokenSource.Token);
+				await _batchSender.SendBatchAsync(batchToSend, _cancellationTokenSource.Token);
+				batchToSend.Clear();
 			}
 			// ReSharper disable once FunctionNeverReturns
 		}
 
-		private async Task ProcessQueueItems(object[] queueItems)
+		public void Dispose()
 		{
-			try
+			var isAcquiredByThisCall = _isDisposeStarted.TryAcquire();
+			if (!isAcquiredByThisCall)
 			{
-				var metadataJson = _payloadItemSerializer.SerializeObject(_metadata);
-				var ndjson = new StringBuilder();
-				ndjson.AppendLine("{\"metadata\": " + metadataJson + "}");
+				_logger.Debug()?.Log("Dispose called but there was already one started before this call - just exiting");
+				return;
+			}
 
-				foreach (var item in queueItems)
+			_logger.Debug()?.Log("Starting Dispose");
+
+			_logger.Debug()?.Log("Signalling _cancellationTokenSource");
+			_cancellationTokenSource.Cancel();
+
+			_logger.Debug()?.Log("Waiting for _singleThreadTaskScheduler thread `{ThreadName}' to exit", _singleThreadTaskScheduler.Thread.Name);
+			_singleThreadTaskScheduler.Thread.Join();
+
+			_logger.Debug()?.Log("_singleThreadTaskScheduler thread exited - disposing of _cancellationTokenSource and exiting");
+
+			_cancellationTokenSource.Dispose();
+		}
+
+		private void ThrowIfDisposed()
+		{
+			if (_isDisposeStarted.IsAcquired)
+				throw new ObjectDisposedException( /* objectName: */ null, /* message: */ $"Disposed {nameof(PayloadSenderV2)} should not be used");
+		}
+
+		//Credit: https://stackoverflow.com/a/30726903/1783306
+		private sealed class SingleThreadTaskScheduler : TaskScheduler
+		{
+			[ThreadStatic]
+			private static bool _isExecuting;
+
+			private readonly CancellationToken _cancellationToken;
+			private readonly IApmLogger _logger;
+
+			private readonly BlockingCollection<Task> _taskQueue;
+
+			public SingleThreadTaskScheduler(IApmLogger logger, CancellationToken cancellationToken)
+			{
+				_logger = logger?.Scoped(nameof(PayloadSenderV2));
+				_cancellationToken = cancellationToken;
+				_taskQueue = new BlockingCollection<Task>();
+				Thread = new Thread(RunOnCurrentThread) { Name = ThreadName, IsBackground = true };
+				Thread.Start();
+			}
+
+			internal Thread Thread { get; }
+
+			private void RunOnCurrentThread()
+			{
+				_logger.Debug()?.Log("`{ThreadName}' thread started", Thread.CurrentThread.Name);
+
+				_isExecuting = true;
+
+				try
 				{
-					var serialized = _payloadItemSerializer.SerializeObject(item);
-					switch (item)
-					{
-						case Transaction _:
-							ndjson.AppendLine("{\"transaction\": " + serialized + "}");
-							break;
-						case Span _:
-							ndjson.AppendLine("{\"span\": " + serialized + "}");
-							break;
-						case Error _:
-							ndjson.AppendLine("{\"error\": " + serialized + "}");
-							break;
-						case Metrics.MetricSet _:
-							ndjson.AppendLine("{\"metricset\": " + serialized + "}");
-							break;
-					}
-					_logger?.Trace()?.Log("Serialized item to send: {ItemToSend} as {SerializedItemToSend}", item, serialized);
+					foreach (var task in _taskQueue.GetConsumingEnumerable(_cancellationToken)) TryExecuteTask(task);
+
+					_logger.Debug()?.Log("`{ThreadName}' thread is about to exit normally", Thread.CurrentThread.Name);
+				}
+				catch (OperationCanceledException ex)
+				{
+					_logger.Debug()
+						?.LogException(ex, "`{ThreadName}' thread is about to exit because it was cancelled, which is expected on shutdown",
+							Thread.CurrentThread.Name);
+				}
+				catch (Exception ex)
+				{
+					_logger.Error()?.LogException(ex, "`{ThreadName}' thread is about to exit because of exception", Thread.CurrentThread.Name);
+				}
+				finally
+				{
+					_isExecuting = false;
+				}
+			}
+
+			protected override IEnumerable<Task> GetScheduledTasks() => null;
+
+			protected override void QueueTask(Task task) => _taskQueue.Add(task, _cancellationToken);
+
+			protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+			{
+				// We'd need to remove the task from queue if it was already queued.
+				// That would be too hard.
+				if (taskWasPreviouslyQueued) return false;
+
+				return _isExecuting && TryExecuteTask(task);
+			}
+		}
+
+		private class EventsQueue
+		{
+			private readonly IAgentTimer _agentTimer;
+			private readonly TimeSpan _discardEventAge;
+			private readonly TimeSpan _flushInterval;
+
+			private readonly object _lock = new object();
+
+			private readonly IApmLogger _logger;
+			private readonly int _maxBatchEventCount;
+			private readonly int _maxQueueEventCount;
+			private readonly Queue<QueuedEvent> _queue;
+
+			internal EventsQueue(IApmLogger logger, int maxQueueEventCount, TimeSpan discardEventAge, int maxBatchEventCount, TimeSpan flushInterval,
+				IAgentTimer agentTimer
+			)
+			{
+				_logger = logger?.Scoped($"{nameof(PayloadSenderV2)}.{nameof(EventsQueue)}");
+				_agentTimer = agentTimer;
+
+				_maxQueueEventCount = maxQueueEventCount;
+				_maxBatchEventCount = maxBatchEventCount;
+				_discardEventAge = discardEventAge;
+				_flushInterval = flushInterval;
+
+				_queue = new Queue<QueuedEvent>(_maxQueueEventCount);
+			}
+
+			private TaskCompletionSource<object> _pendingReceiveTcs;
+
+			private void TryToDequeueDataToSend(AgentTimeInstant now, List<object> listToFill)
+			{
+				Assertion.IfEnabled?.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
+				Assertion.IfEnabled?.That(listToFill.IsEmpty(),
+					$"{nameof(listToFill)} should be empty. {nameof(listToFill)}.Count: {listToFill.Count}");
+
+				if (_queue.Count >= _maxBatchEventCount)
+				{
+					for (var i = 0; i < _maxBatchEventCount; ++i) listToFill.Add(_queue.Dequeue().EventObject);
+					_logger.Trace()
+						?.Log("Filled a batch to send (queue had at least MaxBatchEventCount events)."
+							+ " Batch size: {BatchSize}."
+							+ " Current state: {EventsQueueCurrentState}.",
+							listToFill.Count,
+							DbgCurrentStateToString());
+					return;
 				}
 
-				var content = new StringContent(ndjson.ToString(), Encoding.UTF8, "application/x-ndjson");
-
-				var result = await _httpClient.PostAsync(Consts.IntakeV2Events, content);
-
-				if (result != null && !result.IsSuccessStatusCode)
+				for (var i = 0; i < _maxBatchEventCount && ! _queue.IsEmpty() ; ++i)
 				{
-					_logger?.Error()?.Log("Failed sending event. {ApmServerResponse}", await result.Content.ReadAsStringAsync());
+					if (_queue.Peek().WhenEnqueued + _flushInterval > now) break;
+
+					listToFill.Add(_queue.Dequeue().EventObject);
+				}
+
+				if (listToFill.IsEmpty())
+				{
+					_logger.Trace()
+						?.Log("There is no data that should be sent. Current state: {EventsQueueCurrentState}.", DbgCurrentStateToString());
 				}
 				else
 				{
-					_logger?.Debug()
-						?.Log($"Sent items to server: {Environment.NewLine}{{items}}", string.Join($",{Environment.NewLine}", queueItems.ToArray()));
+					_logger.Trace()
+						?.Log("Filled a batch to send (queue had events ready to be flushed)."
+							+ " Batch size: {BatchSize}."
+							+ " Current state: {EventsQueueCurrentState}.",
+							listToFill.Count,
+							DbgCurrentStateToString());
 				}
 			}
-			catch (Exception e)
+
+			private bool IsFull()
 			{
-				_logger?.Warning()
-					?.LogException(
-						e, "Failed sending events. Following events were not transferred successfully to the server ({ApmServerUrl}):\n{items}",
-						_httpClient.BaseAddress,
-						string.Join($",{Environment.NewLine}", queueItems.ToArray()));
+				Assertion.IfEnabled?.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
+
+				return _queue.Count == _maxQueueEventCount;
 			}
-		}
 
-		public void Dispose() => _batchBlockReceiveAsyncCts?.Dispose();
-	}
+			internal void Enqueue(object eventObj, string dbgEventObjId, string dbgEventKind) =>
+				DoUnderLock(() =>
+				{
+					var now = _agentTimer.Now;
 
-	internal class Metadata
-	{
-		// ReSharper disable once UnusedAutoPropertyAccessor.Global - used by Json.Net
-		public Service Service { get; set; }
+					_logger.Trace()
+						?.Log("Trying to add event to the queue..."
+							+ " Event kind: {EventKind}, ID: {EventId}, event: {Event}."
+							+ " Current state: {EventsQueueCurrentState}.",
+							dbgEventKind, dbgEventObjId, eventObj, DbgCurrentStateToString());
 
-		public Api.System System { get; set; }
-	}
+					if (IsFull())
+					{
+						TryToFreeSpace(now);
+						if (IsFull())
+						{
+							_logger.Trace()
+								?.Log("Failed to add event to the queue - because the queue is full."
+									+ " Event kind: {EventKind}, ID: {EventId}, event: {Event}."
+									+ " Current state: {EventsQueueCurrentState}.",
+									dbgEventKind, dbgEventObjId, eventObj, DbgCurrentStateToString());
+							return;
+						}
+					}
 
-	//Credit: https://stackoverflow.com/a/30726903/1783306
-	internal sealed class SingleThreadTaskScheduler : TaskScheduler
-	{
-		[ThreadStatic]
-		private static bool _isExecuting;
+					var queueWasEmptyBefore = _queue.IsEmpty();
+					_queue.Enqueue(new QueuedEvent(eventObj, dbgEventObjId, dbgEventKind, /* whenEnqueued: */ now));
+					_logger.Trace()
+						?.Log("Added event to the queue."
+							+ " Event kind: {EventKind}, ID: {EventId}, event: {Event}."
+							+ " Current state: {EventsQueueCurrentState}.",
+							dbgEventKind, dbgEventObjId, eventObj, DbgCurrentStateToString());
 
-		private readonly CancellationToken _cancellationToken;
+					if (_pendingReceiveTcs == null)
+					{
+						_logger.Trace()?.Log("There is no pending receive to notify");
+						return;
+					}
 
-		private readonly BlockingCollection<Task> _taskQueue;
+					if (queueWasEmptyBefore || _queue.Count >= _maxBatchEventCount)
+					{
+						_logger.Trace()?.Log("Notifying pending receive..."
+							+ " queueWasEmptyBefore: {queueWasEmptyBefore}."
+							+ " _queue.Count >= _maxBatchEventCount: {_queue.Count >= _maxBatchEventCount}."
+							, queueWasEmptyBefore, _queue.Count >= _maxBatchEventCount);
+						var trySetResultRetVal =_pendingReceiveTcs.TrySetResult(null);
+						if (! trySetResultRetVal)
+							_logger.Trace()?.Log("Pending receive was already notified before but it still didn't handle the previous notification");
+						return;
+					}
 
-		public SingleThreadTaskScheduler(CancellationToken cancellationToken)
-		{
-			_cancellationToken = cancellationToken;
-			_taskQueue = new BlockingCollection<Task>();
-			new Thread(RunOnCurrentThread) { Name = "ElasticApmPayloadSender", IsBackground = true }.Start();
-		}
+					_logger.Trace()?.Log("There was no change that requires notifying pending receive");
+				});
 
-		private void RunOnCurrentThread()
-		{
-			_isExecuting = true;
-
-			try
+			internal async Task ReceiveAsync(List<object> listToFill, CancellationToken cancellationToken)
 			{
-				foreach (var task in _taskQueue.GetConsumingEnumerable(_cancellationToken)) TryExecuteTask(task);
+				if (! listToFill.IsEmpty())
+				{
+					throw new ArgumentException(
+						$"{nameof(listToFill)} should be empty but instead {nameof(listToFill)}.Count is {listToFill.Count}",
+						nameof(listToFill));
+				}
+
+				if (listToFill.Capacity < _maxBatchEventCount)
+				{
+					throw new ArgumentException(
+						$"{nameof(listToFill)} capacity ({listToFill.Capacity}) should not be lower than MaxBatchEventCount ({_maxBatchEventCount})",
+						nameof(listToFill));
+				}
+
+				var dbgIterationCount = 1;
+				while (true)
+				{
+					cancellationToken.ThrowIfCancellationRequested();
+
+					var now = _agentTimer.Now;
+					TimeSpan? timeUntilNextFlush = null;
+
+					DoUnderLock(() =>
+					{
+						// ReSharper disable once AccessToModifiedClosure
+						if (dbgIterationCount == 1)
+							Assertion.IfEnabled?.That(_pendingReceiveTcs == null, "At most one ReceiveAsync should be in progress at any time");
+
+						_logger.Trace()
+							?.Log("Trying to receive data..."
+								+ " Iteration #{IterationCount}."
+								+ " Current state: {EventsQueueCurrentState}."
+								,dbgIterationCount , DbgCurrentStateToString());
+
+						TryToDequeueDataToSend(now, listToFill);
+						if (!listToFill.IsEmpty())
+						{
+							_pendingReceiveTcs = null;
+							return;
+						}
+
+						_pendingReceiveTcs = new TaskCompletionSource<object>();
+						timeUntilNextFlush = CalcTimeLeftToNextFlush(now);
+
+						_logger.Trace()
+							?.Log("Awaiting data to become available..."
+								+ " Iteration #{IterationCount}."
+								+ " Time until next flush: {TimeUntilNextFlush}."
+								+ " Current state: {EventsQueueCurrentState}.",
+								dbgIterationCount,
+								timeUntilNextFlush?.ToString() ?? "N/A (queue is empty)",
+								DbgCurrentStateToString());
+					});
+
+					if (!listToFill.IsEmpty()) return;
+
+					using (cancellationToken.Register(() => _pendingReceiveTcs.TrySetCanceled(cancellationToken)))
+					{
+						if (timeUntilNextFlush.HasValue)
+							// ReSharper disable once PossibleInvalidOperationException
+							await Task.WhenAny(_pendingReceiveTcs.Task, _agentTimer.Delay(now, timeUntilNextFlush.Value));
+						else
+							await _pendingReceiveTcs.Task;
+					}
+
+					++dbgIterationCount;
+				}
 			}
-			finally
+
+			private void TryToFreeSpace(AgentTimeInstant now)
 			{
-				_isExecuting = false;
+				Assertion.IfEnabled?.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
+				Assertion.IfEnabled?.That(IsFull(), nameof(TryToFreeSpace) + " should be called only if " + nameof(IsFull) + " returns true");
+
+				while (!_queue.IsEmpty())
+				{
+					var oldestEvent = _queue.Peek();
+					if (oldestEvent.WhenEnqueued + _discardEventAge > now)
+					{
+						_logger.Trace()
+							?.Log("There are no more events that can be discarded to free up space in the queue."
+								+ " now: {Now}."
+								+ " Current state: {EventsQueueCurrentState}.",
+								now,
+								DbgCurrentStateToString());
+						break;
+					}
+
+					_logger.Trace()
+						?.Log("Discarding event because queue is full and event's age is larger than DiscardEventAge."
+							+ " Queued event: {QueuedEvent}, age: {QueuedEventAge}."
+							+ " now: {Now}."
+							+ " Current state: {EventsQueueCurrentState}."
+							+ " Queued event object: {Event}.",
+							oldestEvent, now - oldestEvent.WhenEnqueued,
+							now,
+							DbgCurrentStateToString(),
+							oldestEvent.EventObject);
+
+					_queue.Dequeue();
+				}
 			}
-		}
 
-		protected override IEnumerable<Task> GetScheduledTasks() => null;
+			private string DbgCurrentStateToString()
+			{
+				Assertion.IfEnabled?.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
 
-		protected override void QueueTask(Task task) => _taskQueue.Add(task, _cancellationToken);
+				return new ToStringBuilder(/* className */ "")
+				{
+					{ $"{nameof(_queue)}.Count", _queue.Count },
+					{ $"{nameof(_queue)}.Peek()", _queue.IsEmpty() ? "N/A (queue is empty)" : _queue.Peek().ToString() },
+					{ $"{nameof(_maxQueueEventCount)}", _maxQueueEventCount },
+					{ $"{nameof(_maxBatchEventCount)}", _maxBatchEventCount },
+					{ $"{nameof(_discardEventAge)}", _discardEventAge },
+					{ $"{nameof(_flushInterval)}", _flushInterval }
+				}.ToString();
+			}
 
-		protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
-		{
-			// We'd need to remove the task from queue if it was already queued.
-			// That would be too hard.
-			if (taskWasPreviouslyQueued) return false;
+			private TimeSpan? CalcTimeLeftToNextFlush(AgentTimeInstant now)
+			{
+				Assertion.IfEnabled?.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
 
-			return _isExecuting && TryExecuteTask(task);
+				if (_queue.IsEmpty()) return null;
+
+				return _queue.Peek().WhenEnqueued + _flushInterval - now;
+			}
+
+			private void AssertValid()
+			{
+				if (!Assertion.IsEnabled) return;
+				var assert = Assertion.IfEnabled.Value;
+
+				assert.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");
+
+				assert.That(_queue.Count <= _maxQueueEventCount,
+					$"_queue.Count <= _maxQueueEventCount. Current state: {DbgCurrentStateToString()}");
+
+				if (Assertion.IsOnLevelEnabled) AssertValidOnLevel();
+
+				void AssertValidOnLevel()
+				{
+					if (_queue.IsEmpty()) return;
+
+					var prevQueuedEvent = _queue.Peek();
+					var index = 0;
+					// ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
+					foreach (var currentQueuedEvent in _queue)
+					{
+						if (index == 0) continue;
+
+						assert.That(prevQueuedEvent.WhenEnqueued <= currentQueuedEvent.WhenEnqueued,
+							$"Events at indexes {index - 1} and {index} are not in ascending order by {nameof(QueuedEvent.WhenEnqueued)} time" +
+							" as they should be");
+
+						prevQueuedEvent = currentQueuedEvent;
+						++index;
+					}
+				}
+			}
+
+			private void DoUnderLock(Action doAction)
+			{
+				lock (_lock)
+				{
+					AssertValid();
+					try
+					{
+						doAction();
+					}
+					finally
+					{
+						AssertValid();
+					}
+				}
+			}
+
+			[DebuggerDisplay(nameof(WhenEnqueued) + " = {" + nameof(WhenEnqueued) + "}"
+				+ ", " + nameof(_dbgEventKind) + " = {" + nameof(_dbgEventKind) + "}"
+				+ ", " + nameof(_dbgEventObjectId) + " = {" + nameof(_dbgEventObjectId) + "}")]
+			private readonly struct QueuedEvent
+			{
+				internal QueuedEvent(object eventObject, string dbgEventObjectId, string dbgEventKind, AgentTimeInstant whenEnqueued)
+				{
+					EventObject = eventObject;
+					_dbgEventObjectId = dbgEventObjectId;
+					_dbgEventKind = dbgEventKind;
+					WhenEnqueued = whenEnqueued;
+				}
+
+				internal readonly object EventObject;
+				private readonly string _dbgEventObjectId;
+				private readonly string _dbgEventKind;
+				internal readonly AgentTimeInstant WhenEnqueued;
+
+				public override string ToString() => new ToStringBuilder(nameof(QueuedEvent))
+				{
+					{ nameof(WhenEnqueued), WhenEnqueued }, { nameof(_dbgEventKind), _dbgEventKind }, { nameof(_dbgEventObjectId), _dbgEventObjectId }
+				}.ToString();
+			}
 		}
 	}
 }
