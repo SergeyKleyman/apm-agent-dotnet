@@ -1,8 +1,5 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
 using Elastic.Apm.Helpers;
 using Elastic.Apm.Tests.Extensions;
 using Elastic.Apm.Tests.TestHelpers;
