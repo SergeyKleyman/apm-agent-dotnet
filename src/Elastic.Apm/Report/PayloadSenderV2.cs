@@ -127,7 +127,7 @@ namespace Elastic.Apm.Report
 		private void ThrowIfDisposed()
 		{
 			if (_isDisposeStarted.IsAcquired)
-				throw new ObjectDisposedException( /* objectName: */ null, /* message: */ $"Disposed {nameof(PayloadSenderV2)} should not be used");
+				throw new ObjectDisposedException( /* objectName: */ nameof(PayloadSenderV2));
 		}
 
 		//Credit: https://stackoverflow.com/a/30726903/1783306
@@ -136,14 +136,14 @@ namespace Elastic.Apm.Report
 			[ThreadStatic]
 			private static bool _isExecuting;
 
-			private readonly CancellationToken _cancellationToken;
 			private readonly IApmLogger _logger;
+			private readonly CancellationToken _cancellationToken;
 
 			private readonly BlockingCollection<Task> _taskQueue;
 
 			public SingleThreadTaskScheduler(IApmLogger logger, CancellationToken cancellationToken)
 			{
-				_logger = logger?.Scoped(nameof(PayloadSenderV2));
+				_logger = logger?.Scoped(nameof(SingleThreadTaskScheduler));
 				_cancellationToken = cancellationToken;
 				_taskQueue = new BlockingCollection<Task>();
 				Thread = new Thread(RunOnCurrentThread) { Name = ThreadName, IsBackground = true };
