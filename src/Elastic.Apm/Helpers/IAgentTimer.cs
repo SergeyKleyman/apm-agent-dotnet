@@ -28,28 +28,28 @@ namespace Elastic.Apm.Helpers
 		internal static async Task<bool> TryAwaitOrTimeout(this IAgentTimer timer, Task taskToAwait
 			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
-			var timeOutTimerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			Task timeOutTask = null;
+			var timeoutDelayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			Task timeoutDelayTask = null;
 			try
 			{
-				timeOutTask = timer.Delay(relativeToInstant, timeout, timeOutTimerCts.Token);
-				var completedTask = await Task.WhenAny(taskToAwait, timeOutTask);
+				timeoutDelayTask = timer.Delay(relativeToInstant, timeout, timeoutDelayCts.Token);
+				var completedTask = await Task.WhenAny(taskToAwait, timeoutDelayTask);
 				if (completedTask == taskToAwait)
 				{
 					await taskToAwait;
 					return true;
 				}
 
-				Assertion.IfEnabled?.That(completedTask == timeOutTask
-					, $"{nameof(completedTask)}: {completedTask}, {nameof(timeOutTask)}: timeOutTask, {nameof(taskToAwait)}: taskToAwait");
+				Assertion.IfEnabled?.That(completedTask == timeoutDelayTask
+					, $"{nameof(completedTask)}: {completedTask}, {nameof(timeoutDelayTask)}: timeOutTask, {nameof(taskToAwait)}: taskToAwait");
 				// no need to cancel timeout timer if it has been triggered
-				timeOutTask = null;
+				timeoutDelayTask = null;
 				return false;
 			}
 			finally
 			{
-				if (timeOutTask != null) timeOutTimerCts.Cancel();
-				timeOutTimerCts.Dispose();
+				if (timeoutDelayTask != null) timeoutDelayCts.Cancel();
+				timeoutDelayCts.Dispose();
 			}
 		}
 
