@@ -331,8 +331,8 @@ namespace Elastic.Apm.Report
 				if (! listToFill.IsEmpty())
 				{
 					throw new ArgumentException(
-						$"{nameof(listToFill)} should be empty but instead {nameof(listToFill)}.Count is {listToFill.Count}",
-						nameof(listToFill));
+						/* message: */ $"{nameof(listToFill)} should be empty but instead {nameof(listToFill)}.Count is {listToFill.Count}",
+						/* paramName: */ nameof(listToFill));
 				}
 
 				if (listToFill.Capacity < _maxBatchEventCount)
@@ -366,7 +366,7 @@ namespace Elastic.Apm.Report
 
 			private TimeSpan? TryReceive(List<object> listToFill, long dbgIterationCount, AgentTimeInstant now)
 			{
-				TimeSpan? timeUntilNextFlush;
+				TimeSpan? timeUntilNextFlush = null;
 				DoUnderLock(() =>
 				{
 					// ReSharper disable once AccessToModifiedClosure
