@@ -342,59 +342,63 @@ namespace Elastic.Apm.Report
 						nameof(listToFill));
 				}
 
-				var dbgIterationCount = 1;
+				var dbgIterationCount = 1L;
 				while (true)
 				{
 					cancellationToken.ThrowIfCancellationRequested();
 
 					var now = _agentTimer.Now;
-					TimeSpan? timeUntilNextFlush = null;
-
-					DoUnderLock(() =>
-					{
-						// ReSharper disable once AccessToModifiedClosure
-						if (dbgIterationCount == 1)
-							Assertion.IfEnabled?.That(_pendingReceiveTcs == null, "At most one ReceiveAsync should be in progress at any time");
-
-						_logger.Trace()
-							?.Log("Trying to receive data..."
-								+ " Iteration #{IterationCount}."
-								+ " Current state: {EventsQueueCurrentState}."
-								,dbgIterationCount , DbgCurrentStateToString());
-
-						TryToDequeueDataToSend(now, listToFill);
-						if (!listToFill.IsEmpty())
-						{
-							_pendingReceiveTcs = null;
-							return;
-						}
-
-						_pendingReceiveTcs = new TaskCompletionSource<object>();
-						timeUntilNextFlush = CalcTimeLeftToNextFlush(now);
-
-						_logger.Trace()
-							?.Log("Awaiting data to become available..."
-								+ " Iteration #{IterationCount}."
-								+ " Time until next flush: {TimeUntilNextFlush}."
-								+ " Current state: {EventsQueueCurrentState}.",
-								dbgIterationCount,
-								timeUntilNextFlush?.ToString() ?? "N/A (queue is empty)",
-								DbgCurrentStateToString());
-					});
-
+					var timeUntilNextFlush = TryReceive(listToFill, dbgIterationCount, now);
 					if (!listToFill.IsEmpty()) return;
 
 					using (cancellationToken.Register(() => _pendingReceiveTcs.TrySetCanceled(cancellationToken)))
 					{
 						if (timeUntilNextFlush.HasValue)
 							// ReSharper disable once PossibleInvalidOperationException
-							await _agentTimer.AwaitOrTimeout(_pendingReceiveTcs.Task, now, timeUntilNextFlush.Value);
+							await _agentTimer.AwaitOrTimeout(_pendingReceiveTcs.Task, now, timeUntilNextFlush.Value, cancellationToken);
 						else
 							await _pendingReceiveTcs.Task;
 					}
 
 					++dbgIterationCount;
 				}
+			}
+
+			private TimeSpan? TryReceive(List<object> listToFill, long dbgIterationCount, AgentTimeInstant now)
+			{
+				TimeSpan? timeUntilNextFlush;
+				DoUnderLock(() =>
+				{
+					// ReSharper disable once AccessToModifiedClosure
+					if (dbgIterationCount == 1)
+						Assertion.IfEnabled?.That(_pendingReceiveTcs == null, "At most one ReceiveAsync should be in progress at any time");
+
+					_logger.Trace()
+						?.Log("Trying to receive data..."
+							+ " Iteration #{IterationCount}."
+							+ " Current state: {EventsQueueCurrentState}."
+							, dbgIterationCount, DbgCurrentStateToString());
+
+					TryToDequeueDataToSend(now, listToFill);
+					if (!listToFill.IsEmpty())
+					{
+						_pendingReceiveTcs = null;
+						return;
+					}
+
+					_pendingReceiveTcs = new TaskCompletionSource<object>();
+					timeUntilNextFlush = CalcTimeLeftToNextFlush(now);
+
+					_logger.Trace()
+						?.Log("Awaiting data to become available..."
+							+ " Iteration #{IterationCount}."
+							+ " Time until next flush: {TimeUntilNextFlush}."
+							+ " Current state: {EventsQueueCurrentState}.",
+							dbgIterationCount,
+							timeUntilNextFlush?.ToString() ?? "N/A (queue is empty)",
+							DbgCurrentStateToString());
+				});
+				return timeUntilNextFlush;
 			}
 
 			private void TryToFreeSpace(AgentTimeInstant now)
@@ -458,6 +462,7 @@ namespace Elastic.Apm.Report
 			private void AssertValid()
 			{
 				if (!Assertion.IsEnabled) return;
+				// ReSharper disable once PossibleInvalidOperationException
 				var assert = Assertion.IfEnabled.Value;
 
 				assert.That(Monitor.IsEntered(_lock), "Current thread should hold the lock");

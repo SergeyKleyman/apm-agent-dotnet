@@ -26,13 +26,13 @@ namespace Elastic.Apm.Helpers
 		/// </summary>
 		/// <returns><c>true</c> if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
 		internal static async Task<bool> TryAwaitOrTimeout(this IAgentTimer timer, Task taskToAwait
-			, AgentTimeInstant relativeToInstant, TimeSpan timeout)
+			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
-			var timeOutTimerTcs = new CancellationTokenSource();
+			var timeOutTimerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			Task timeOutTask = null;
 			try
 			{
-				timeOutTask = timer.Delay(relativeToInstant, timeout, timeOutTimerTcs.Token);
+				timeOutTask = timer.Delay(relativeToInstant, timeout, timeOutTimerCts.Token);
 				var completedTask = await Task.WhenAny(taskToAwait, timeOutTask);
 				if (completedTask == taskToAwait)
 				{
@@ -48,8 +48,8 @@ namespace Elastic.Apm.Helpers
 			}
 			finally
 			{
-				if (timeOutTask != null) timeOutTimerTcs.Cancel();
-				timeOutTimerTcs.Dispose();
+				if (timeOutTask != null) timeOutTimerCts.Cancel();
+				timeOutTimerCts.Dispose();
 			}
 		}
 
@@ -63,9 +63,10 @@ namespace Elastic.Apm.Helpers
 		/// </summary>
 		/// <returns>(<c>true</c>, result of <c>taskToAwait</c>) if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
 		internal static async Task<ValueTuple<bool, TResult>> TryAwaitOrTimeout<TResult>(this IAgentTimer timer, Task<TResult> taskToAwait
-			, AgentTimeInstant relativeToInstant, TimeSpan timeout)
+			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
-			var hasTaskToAwaitCompletedBeforeTimeout = await TryAwaitOrTimeout(timer, (Task)taskToAwait, relativeToInstant, timeout);
+			var hasTaskToAwaitCompletedBeforeTimeout =
+				await TryAwaitOrTimeout(timer, (Task)taskToAwait, relativeToInstant, timeout, cancellationToken);
 			return (hasTaskToAwaitCompletedBeforeTimeout, hasTaskToAwaitCompletedBeforeTimeout ? await taskToAwait : default);
 		}
 
@@ -78,9 +79,10 @@ namespace Elastic.Apm.Helpers
 		/// For more detailed explanation see https://devblogs.microsoft.com/pfxteam/crafting-a-task-timeoutafter-method/
 		/// </summary>
 		/// <exception cref="TimeoutException">Thrown when timeout expires before <c>taskToAwait</c> completes</exception>
-		internal static async Task AwaitOrTimeout(this IAgentTimer timer, Task taskToAwait, AgentTimeInstant relativeToInstant, TimeSpan timeout)
+		internal static async Task AwaitOrTimeout(this IAgentTimer timer, Task taskToAwait, AgentTimeInstant relativeToInstant, TimeSpan timeout
+			, CancellationToken cancellationToken = default)
 		{
-			if (await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout)) return;
+			if (await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout, cancellationToken)) return;
 			throw new TimeoutException();
 		}
 
@@ -95,9 +97,10 @@ namespace Elastic.Apm.Helpers
 		/// <exception cref="TimeoutException">Thrown when timeout expires before <c>taskToAwait</c> completes</exception>
 		/// <returns>(<c>true</c>, result of <c>taskToAwait</c>) if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
 		internal static async Task<TResult> AwaitOrTimeout<TResult>(this IAgentTimer timer, Task<TResult> taskToAwait
-			, AgentTimeInstant relativeToInstant, TimeSpan timeout)
+			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
-			var (hasTaskToAwaitCompletedBeforeTimeout, result) = await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout);
+			var (hasTaskToAwaitCompletedBeforeTimeout, result) =
+				await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout, cancellationToken);
 			if (hasTaskToAwaitCompletedBeforeTimeout) return result;
 			throw new TimeoutException();
 		}

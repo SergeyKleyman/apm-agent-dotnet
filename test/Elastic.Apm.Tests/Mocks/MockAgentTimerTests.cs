@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Elastic.Apm.Helpers;
@@ -261,8 +262,10 @@ namespace Elastic.Apm.Tests.Mocks
 
 		internal interface IAwaitOrTimeoutTaskVariant
 		{
-			Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout);
-			Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout);
+			Task TaskToAwait { get; }
+
+			Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout, CancellationToken cancellationToken = default);
+			Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout, CancellationToken cancellationToken = default);
 
 			void VerifyTryAwaitTimeout(Task tryAwaitOrTimeoutTask);
 
@@ -298,15 +301,17 @@ namespace Elastic.Apm.Tests.Mocks
 				_resultValue = resultValue;
 			}
 
-			public Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout) =>
-				_isVoid
-					? (Task)agentTimer.TryAwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout)
-					: agentTimer.TryAwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout);
+			public Task TaskToAwait => _taskToAwaitTcs.Task;
 
-			public Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout) =>
+			public Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout, CancellationToken cancellationToken = default) =>
 				_isVoid
-					? agentTimer.AwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout)
-					: agentTimer.AwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout);
+					? (Task)agentTimer.TryAwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout, cancellationToken)
+					: agentTimer.TryAwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout, cancellationToken);
+
+			public Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+				_isVoid
+					? agentTimer.AwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout, cancellationToken)
+					: agentTimer.AwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout, cancellationToken);
 
 			private void UnpackTryAwaitOrTimeoutTaskResult(Task tryAwaitOrTimeoutTask, out bool hasTaskToAwaitCompleted, out TResult taskToAwaitResult)
 			{
@@ -316,9 +321,7 @@ namespace Elastic.Apm.Tests.Mocks
 					taskToAwaitResult = default;
 				}
 				else
-				{
 					(hasTaskToAwaitCompleted, taskToAwaitResult) = ((Task<ValueTuple<bool, TResult>>)tryAwaitOrTimeoutTask).Result;
-				}
 			}
 
 			public void VerifyTryAwaitTimeout(Task tryAwaitOrTimeoutTask)
@@ -376,6 +379,7 @@ namespace Elastic.Apm.Tests.Mocks
 					caughtEx.InnerExceptions.Should().ContainSingle();
 					ex = (OperationCanceledException)caughtEx.InnerException;
 				}
+				// ReSharper disable once PossibleNullReferenceException
 				ex.CancellationToken.Should().Be(_cancellationToken);
 
 				_taskToAwaitTcs.Task.IsCanceled.Should().BeTrue();
@@ -412,6 +416,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -420,6 +426,7 @@ namespace Elastic.Apm.Tests.Mocks
 			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
 			variant.VerifyTryAwaitCompletedSuccessfully(tryAwaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 
 		[Theory]
@@ -430,12 +437,15 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 
 			timer.FastForward(5.Seconds());
 
 			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
 			variant.VerifyTryAwaitTimeout(tryAwaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCompletedSuccessfully.Should().BeTrue();
 		}
 
 		[Theory]
@@ -446,6 +456,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -453,6 +465,7 @@ namespace Elastic.Apm.Tests.Mocks
 
 			variant.VerifyCancelled(tryAwaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 
 		[Theory]
@@ -463,6 +476,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -470,6 +485,29 @@ namespace Elastic.Apm.Tests.Mocks
 
 			variant.VerifyFaulted(tryAwaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void TryAwaitOrTimeout_Delay_cancelled_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var cts = new CancellationTokenSource();
+			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds(), cts.Token);
+			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
+			timer.FastForward(3.Seconds());
+			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			cts.Cancel();
+
+			tryAwaitOrTimeoutTask.IsCanceled.Should().BeFalse();
+			variant.TaskToAwait.IsCompleted.Should().BeFalse();
+			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 
 		[Theory]
@@ -480,6 +518,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -489,6 +529,7 @@ namespace Elastic.Apm.Tests.Mocks
 			variant.VerifyAwaitCompletedSuccessfully(awaitOrTimeoutTask);
 
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 
 		[Theory]
@@ -499,6 +540,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 
 			timer.FastForward(5.Seconds());
 
@@ -506,6 +549,7 @@ namespace Elastic.Apm.Tests.Mocks
 			awaitOrTimeoutTask.Exception.InnerExceptions.Should().ContainSingle();
 			awaitOrTimeoutTask.Exception.InnerException.Should().BeOfType<TimeoutException>();
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCompletedSuccessfully.Should().BeTrue();
 		}
 
 		[Theory]
@@ -516,6 +560,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -523,6 +569,7 @@ namespace Elastic.Apm.Tests.Mocks
 
 			variant.VerifyCancelled(awaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 
 		[Theory]
@@ -533,6 +580,8 @@ namespace Elastic.Apm.Tests.Mocks
 			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
 			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
 			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
 			timer.FastForward(3.Seconds());
 			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
 
@@ -540,6 +589,29 @@ namespace Elastic.Apm.Tests.Mocks
 
 			variant.VerifyFaulted(awaitOrTimeoutTask);
 			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void AwaitOrTimeout_Delay_cancelled_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var cts = new CancellationTokenSource();
+			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds(), cts.Token);
+			timer.DelayItemsCount.Should().Be(1);
+			var delayTask = timer.DelayTasks.First();
+			delayTask.IsCompleted.Should().BeFalse();
+			timer.FastForward(3.Seconds());
+			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			cts.Cancel();
+
+			awaitOrTimeoutTask.IsCanceled.Should().BeFalse();
+			variant.TaskToAwait.IsCompleted.Should().BeFalse();
+			timer.DelayItemsCount.Should().Be(0);
+			delayTask.IsCanceled.Should().BeTrue();
 		}
 	}
 

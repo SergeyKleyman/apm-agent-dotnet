@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +27,8 @@ namespace Elastic.Apm.Tests.Mocks
 		}
 
 		internal int DelayItemsCount => _delayItems.Count;
+
+		internal IReadOnlyList<Task> DelayTasks => _delayItems.DelayTasks;
 
 		public AgentTimeInstant Now
 		{
@@ -128,6 +131,8 @@ namespace Elastic.Apm.Tests.Mocks
 
 			internal int Count => DoUnderLock(() => _items.Count);
 
+			internal IReadOnlyList<Task> DelayTasks => DoUnderLock(() => _items.Select(d => d.TriggerTcs.Task).ToList());
+
 			internal AgentTimeInstant Now
 			{
 				get => DoUnderLock(() =>
@@ -146,14 +151,7 @@ namespace Elastic.Apm.Tests.Mocks
 
 					var newItemId = _nextItemId++;
 
-					var newItemIndex = 0;
-					foreach (var item in _items)
-					{
-						if (whenToTrigger < item.WhenToTrigger) break;
-
-						++newItemIndex;
-					}
-
+					var newItemIndex = _items.TakeWhile(item => whenToTrigger >= item.WhenToTrigger).Count();
 					_items.Insert(newItemIndex, new DelayItem(newItemId, whenToTrigger, triggerTcs, cancellationToken));
 					return  (_now, newItemId);
 				});
