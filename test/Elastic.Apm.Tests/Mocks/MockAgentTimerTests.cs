@@ -233,6 +233,314 @@ namespace Elastic.Apm.Tests.Mocks
 			var delayTask = timer.Delay(now, timeToWait);
 			delayTask.IsCompleted.Should().BeTrue();
 		}
+
+		[Fact]
+		public void TryAwaitOrTimeout_Task_void_test()
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			var taskToAwaitTcs = new TaskCompletionSource<object>();
+			timer.DelayItemsCount.Should().Be(0);
+			var tryAwaitOrTimeoutTask = timer.TryAwaitOrTimeout((Task)taskToAwaitTcs.Task, timer.Now, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(5.Seconds());
+			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
+			tryAwaitOrTimeoutTask.Result.Should().BeFalse();
+			taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+			timer.DelayItemsCount.Should().Be(0);
+
+			tryAwaitOrTimeoutTask = timer.TryAwaitOrTimeout((Task)taskToAwaitTcs.Task, timer.Now, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+			taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+			taskToAwaitTcs.SetResult(null);
+			taskToAwaitTcs.Task.IsCompletedSuccessfully.Should().BeTrue();
+			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
+			tryAwaitOrTimeoutTask.Result.Should().BeTrue();
+		}
+
+		internal interface IAwaitOrTimeoutTaskVariant
+		{
+			Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout);
+			Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout);
+
+			void VerifyTryAwaitTimeout(Task tryAwaitOrTimeoutTask);
+
+			void CompleteTaskSuccessfully();
+			void VerifyTryAwaitCompletedSuccessfully(Task tryAwaitOrTimeoutTask);
+			void VerifyAwaitCompletedSuccessfully(Task awaitOrTimeoutTask);
+
+			void CancelTask();
+			void VerifyCancelled(Task xyzAwaitOrTimeoutTask);
+
+			void FaultTask();
+			void VerifyFaulted(Task xyzAwaitOrTimeoutTask);
+		}
+
+		private class AwaitOrTimeoutTaskVariant<TResult>: IAwaitOrTimeoutTaskVariant
+		{
+			private readonly TaskCompletionSource<TResult> _taskToAwaitTcs = new TaskCompletionSource<TResult>();
+			private readonly bool _isVoid;
+			private readonly TResult _resultValue;
+			private readonly CancellationToken _cancellationToken = new CancellationToken(true);
+			private readonly DummyTestException _dummyTestException = new DummyTestException();
+
+			internal AwaitOrTimeoutTaskVariant()
+			{
+				_isVoid = true;
+				_resultValue = default;
+			}
+
+			internal AwaitOrTimeoutTaskVariant(TResult resultValue)
+			{
+				_isVoid = false;
+				resultValue.Should().NotBe(default);
+				_resultValue = resultValue;
+			}
+
+			public Task TryAwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout) =>
+				_isVoid
+					? (Task)agentTimer.TryAwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout)
+					: agentTimer.TryAwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout);
+
+			public Task AwaitOrTimeoutCall(IAgentTimer agentTimer, TimeSpan timeout) =>
+				_isVoid
+					? agentTimer.AwaitOrTimeout((Task)_taskToAwaitTcs.Task, agentTimer.Now, timeout)
+					: agentTimer.AwaitOrTimeout(_taskToAwaitTcs.Task, agentTimer.Now, timeout);
+
+			private void UnpackTryAwaitOrTimeoutTaskResult(Task tryAwaitOrTimeoutTask, out bool hasTaskToAwaitCompleted, out TResult taskToAwaitResult)
+			{
+				if (_isVoid)
+				{
+					hasTaskToAwaitCompleted = ((Task<bool>)tryAwaitOrTimeoutTask).Result;
+					taskToAwaitResult = default;
+				}
+				else
+				{
+					(hasTaskToAwaitCompleted, taskToAwaitResult) = ((Task<ValueTuple<bool, TResult>>)tryAwaitOrTimeoutTask).Result;
+				}
+			}
+
+			public void VerifyTryAwaitTimeout(Task tryAwaitOrTimeoutTask)
+			{
+				UnpackTryAwaitOrTimeoutTaskResult(tryAwaitOrTimeoutTask, out var hasTaskToAwaitCompleted, out var taskToAwaitResult);
+				hasTaskToAwaitCompleted.Should().BeFalse();
+				taskToAwaitResult.Should().Be(default(TResult));
+
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+			}
+
+			public void CompleteTaskSuccessfully()
+			{
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+				_taskToAwaitTcs.SetResult(_resultValue);
+			}
+
+			public void VerifyTryAwaitCompletedSuccessfully(Task tryAwaitOrTimeoutTask)
+			{
+				UnpackTryAwaitOrTimeoutTaskResult(tryAwaitOrTimeoutTask, out var hasTaskToAwaitCompleted, out var taskToAwaitResult);
+				hasTaskToAwaitCompleted.Should().BeTrue();
+				taskToAwaitResult.Should().Be(_resultValue);
+
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeTrue();
+				_taskToAwaitTcs.Task.Result.Should().Be(_resultValue);
+			}
+
+			public void VerifyAwaitCompletedSuccessfully(Task awaitOrTimeoutTask)
+			{
+				if (! _isVoid) ((Task<TResult>)awaitOrTimeoutTask).Result.Should().Be(_resultValue);
+
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeTrue();
+				_taskToAwaitTcs.Task.Result.Should().Be(_resultValue);
+			}
+
+			public void CancelTask()
+			{
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+				var trySetCanceledRetVal = _taskToAwaitTcs.TrySetCanceled(_cancellationToken);
+				trySetCanceledRetVal.Should().BeTrue();
+			}
+
+			public void VerifyCancelled(Task xyzAwaitOrTimeoutTask)
+			{
+				xyzAwaitOrTimeoutTask.IsCanceled.Should().BeTrue();
+				// ReSharper disable once PossibleNullReferenceException
+				OperationCanceledException ex = null;
+				try
+				{
+					// ReSharper disable once MethodSupportsCancellation
+					xyzAwaitOrTimeoutTask.Wait();
+				}
+				catch (AggregateException caughtEx)
+				{
+					caughtEx.InnerExceptions.Should().ContainSingle();
+					ex = (OperationCanceledException)caughtEx.InnerException;
+				}
+				ex.CancellationToken.Should().Be(_cancellationToken);
+
+				_taskToAwaitTcs.Task.IsCanceled.Should().BeTrue();
+			}
+
+			public void FaultTask()
+			{
+				_taskToAwaitTcs.Task.IsCompleted.Should().BeFalse();
+				_taskToAwaitTcs.SetException(_dummyTestException);
+			}
+
+			public void VerifyFaulted(Task xyzAwaitOrTimeoutTask)
+			{
+				xyzAwaitOrTimeoutTask.IsFaulted.Should().BeTrue();
+				// ReSharper disable once PossibleNullReferenceException
+				xyzAwaitOrTimeoutTask.Exception.InnerException.Should().Be(_dummyTestException);
+
+				_taskToAwaitTcs.Task.IsFaulted.Should().BeTrue();
+			}
+		}
+
+		public static TheoryData AwaitOrTimeoutTaskVariantsToTest => new TheoryData<string, IAwaitOrTimeoutTaskVariant>
+		{
+			{ "Task", new AwaitOrTimeoutTaskVariant<object>() },
+			{ "Task<int>, 123", new AwaitOrTimeoutTaskVariant<int>(123) },
+			{ "Task<string>, `456'", new AwaitOrTimeoutTaskVariant<string>("456") }
+		};
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void TryAwaitOrTimeout_task_completed_successfully_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.CompleteTaskSuccessfully();
+
+			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
+			variant.VerifyTryAwaitCompletedSuccessfully(tryAwaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void TryAwaitOrTimeout_task_timed_out_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+
+			timer.FastForward(5.Seconds());
+
+			tryAwaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
+			variant.VerifyTryAwaitTimeout(tryAwaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void TryAwaitOrTimeout_task_cancelled_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.CancelTask();
+
+			variant.VerifyCancelled(tryAwaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void TryAwaitOrTimeout_task_faulted_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var tryAwaitOrTimeoutTask = variant.TryAwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			tryAwaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.FaultTask();
+
+			variant.VerifyFaulted(tryAwaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void AwaitOrTimeout_task_completed_successfully_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.CompleteTaskSuccessfully();
+
+			awaitOrTimeoutTask.IsCompletedSuccessfully.Should().BeTrue();
+			variant.VerifyAwaitCompletedSuccessfully(awaitOrTimeoutTask);
+
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void AwaitOrTimeout_task_timed_out_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+
+			timer.FastForward(5.Seconds());
+
+			awaitOrTimeoutTask.IsFaulted.Should().BeTrue();
+			awaitOrTimeoutTask.Exception.InnerExceptions.Should().ContainSingle();
+			awaitOrTimeoutTask.Exception.InnerException.Should().BeOfType<TimeoutException>();
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void AwaitOrTimeout_task_cancelled_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.CancelTask();
+
+			variant.VerifyCancelled(awaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
+
+		[Theory]
+		[MemberData(nameof(AwaitOrTimeoutTaskVariantsToTest))]
+		internal void AwaitOrTimeout_task_faulted_test(string dbgVariantDesc, IAwaitOrTimeoutTaskVariant variant)
+		{
+			var timer = new MockAgentTimer(DbgUtils.GetCurrentMethodName());
+			timer.DelayItemsCount.Should().Be(0, $"because {nameof(dbgVariantDesc)}: {dbgVariantDesc}");
+			var awaitOrTimeoutTask = variant.AwaitOrTimeoutCall(timer, 5.Seconds());
+			timer.DelayItemsCount.Should().Be(1);
+			timer.FastForward(3.Seconds());
+			awaitOrTimeoutTask.IsCompleted.Should().BeFalse();
+
+			variant.FaultTask();
+
+			variant.VerifyFaulted(awaitOrTimeoutTask);
+			timer.DelayItemsCount.Should().Be(0);
+		}
 	}
 
 	internal static class MockAgentTimerTestsExtensions

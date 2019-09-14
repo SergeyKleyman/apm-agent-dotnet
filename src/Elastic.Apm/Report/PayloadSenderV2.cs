@@ -388,7 +388,7 @@ namespace Elastic.Apm.Report
 					{
 						if (timeUntilNextFlush.HasValue)
 							// ReSharper disable once PossibleInvalidOperationException
-							await Task.WhenAny(_pendingReceiveTcs.Task, _agentTimer.Delay(now, timeUntilNextFlush.Value));
+							await _agentTimer.AwaitOrTimeout(_pendingReceiveTcs.Task, now, timeUntilNextFlush.Value);
 						else
 							await _pendingReceiveTcs.Task;
 					}
