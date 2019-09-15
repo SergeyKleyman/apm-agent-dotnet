@@ -11,7 +11,7 @@ namespace Elastic.Apm.Helpers
 
 		public AgentTimeInstant Now => new AgentTimeInstant(this, _stopwatch.Elapsed);
 
-		public async Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken)
+		public async Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken = default)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
@@ -21,5 +21,7 @@ namespace Elastic.Apm.Helpers
 
 			await Task.Delay(delayRemainder, cancellationToken);
 		}
+
+		internal AgentTimeInstant StartTime => new AgentTimeInstant(this, TimeSpan.Zero);
 	}
 }

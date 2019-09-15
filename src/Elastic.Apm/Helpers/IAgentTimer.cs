@@ -8,14 +8,11 @@ namespace Elastic.Apm.Helpers
 	{
 		AgentTimeInstant Now { get; }
 
-		Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken);
+		Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken = default);
 	}
 
 	internal static class AgentTimerExtensions
 	{
-		internal static Task Delay(this IAgentTimer timer, AgentTimeInstant relativeToInstant, TimeSpan delay) =>
-			timer.Delay(relativeToInstant, delay, default);
-
 		/// <summary>
 		/// It's recommended to use this method (or another TryAwaitOrTimeout or AwaitOrTimeout method)
 		/// instead of just Task.WhenAny(taskToAwait, Task.Delay(timeout))
@@ -25,14 +22,13 @@ namespace Elastic.Apm.Helpers
 		/// For more detailed explanation see https://devblogs.microsoft.com/pfxteam/crafting-a-task-timeoutafter-method/
 		/// </summary>
 		/// <returns><c>true</c> if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
-		internal static async Task<bool> TryAwaitOrTimeout(this IAgentTimer timer, Task taskToAwait
+		internal static async Task<bool> TryAwaitOrTimeout(this IAgentTimer agentTimer, Task taskToAwait
 			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
 			var timeoutDelayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			Task timeoutDelayTask = null;
+			var timeoutDelayTask = agentTimer.Delay(relativeToInstant, timeout, timeoutDelayCts.Token);
 			try
 			{
-				timeoutDelayTask = timer.Delay(relativeToInstant, timeout, timeoutDelayCts.Token);
 				var completedTask = await Task.WhenAny(taskToAwait, timeoutDelayTask);
 				if (completedTask == taskToAwait)
 				{
@@ -62,11 +58,11 @@ namespace Elastic.Apm.Helpers
 		/// For more detailed explanation see https://devblogs.microsoft.com/pfxteam/crafting-a-task-timeoutafter-method/
 		/// </summary>
 		/// <returns>(<c>true</c>, result of <c>taskToAwait</c>) if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
-		internal static async Task<ValueTuple<bool, TResult>> TryAwaitOrTimeout<TResult>(this IAgentTimer timer, Task<TResult> taskToAwait
+		internal static async Task<ValueTuple<bool, TResult>> TryAwaitOrTimeout<TResult>(this IAgentTimer agentTimer, Task<TResult> taskToAwait
 			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
 			var hasTaskToAwaitCompletedBeforeTimeout =
-				await TryAwaitOrTimeout(timer, (Task)taskToAwait, relativeToInstant, timeout, cancellationToken);
+				await TryAwaitOrTimeout(agentTimer, (Task)taskToAwait, relativeToInstant, timeout, cancellationToken);
 			return (hasTaskToAwaitCompletedBeforeTimeout, hasTaskToAwaitCompletedBeforeTimeout ? await taskToAwait : default);
 		}
 
@@ -79,10 +75,10 @@ namespace Elastic.Apm.Helpers
 		/// For more detailed explanation see https://devblogs.microsoft.com/pfxteam/crafting-a-task-timeoutafter-method/
 		/// </summary>
 		/// <exception cref="TimeoutException">Thrown when timeout expires before <c>taskToAwait</c> completes</exception>
-		internal static async Task AwaitOrTimeout(this IAgentTimer timer, Task taskToAwait, AgentTimeInstant relativeToInstant, TimeSpan timeout
+		internal static async Task AwaitOrTimeout(this IAgentTimer agentTimer, Task taskToAwait, AgentTimeInstant relativeToInstant, TimeSpan timeout
 			, CancellationToken cancellationToken = default)
 		{
-			if (await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout, cancellationToken)) return;
+			if (await TryAwaitOrTimeout(agentTimer, taskToAwait, relativeToInstant, timeout, cancellationToken)) return;
 			throw new TimeoutException();
 		}
 
@@ -96,11 +92,11 @@ namespace Elastic.Apm.Helpers
 		/// </summary>
 		/// <exception cref="TimeoutException">Thrown when timeout expires before <c>taskToAwait</c> completes</exception>
 		/// <returns>(<c>true</c>, result of <c>taskToAwait</c>) if <c>taskToAwait</c> completed before the timeout, <c>false</c> otherwise</returns>
-		internal static async Task<TResult> AwaitOrTimeout<TResult>(this IAgentTimer timer, Task<TResult> taskToAwait
+		internal static async Task<TResult> AwaitOrTimeout<TResult>(this IAgentTimer agentTimer, Task<TResult> taskToAwait
 			, AgentTimeInstant relativeToInstant, TimeSpan timeout, CancellationToken cancellationToken = default)
 		{
 			var (hasTaskToAwaitCompletedBeforeTimeout, result) =
-				await TryAwaitOrTimeout(timer, taskToAwait, relativeToInstant, timeout, cancellationToken);
+				await TryAwaitOrTimeout(agentTimer, taskToAwait, relativeToInstant, timeout, cancellationToken);
 			if (hasTaskToAwaitCompletedBeforeTimeout) return result;
 			throw new TimeoutException();
 		}

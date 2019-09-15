@@ -17,6 +17,8 @@ namespace Elastic.Apm.Report
 	/// </summary>
 	internal class PayloadSenderV2 : IPayloadSender, IDisposable
 	{
+		private const string ThisClassName = nameof(PayloadSenderV2);
+
 		internal const string ThreadName = "ElasticApmPayloadSender";
 
 		internal readonly Api.System System;
@@ -39,7 +41,7 @@ namespace Elastic.Apm.Report
 			IBatchSender batchSender = null, IAgentTimer agentTimer = null
 		)
 		{
-			_logger = logger?.Scoped(nameof(PayloadSenderV2));
+			_logger = logger?.Scoped(ThisClassName);
 
 			System = system;
 
@@ -127,12 +129,14 @@ namespace Elastic.Apm.Report
 		private void ThrowIfDisposed()
 		{
 			if (_isDisposeStarted.IsAcquired)
-				throw new ObjectDisposedException( /* objectName: */ nameof(PayloadSenderV2));
+				throw new ObjectDisposedException( /* objectName: */ ThisClassName);
 		}
 
 		//Credit: https://stackoverflow.com/a/30726903/1783306
 		private sealed class SingleThreadTaskScheduler : TaskScheduler
 		{
+			private const string ThisClassName = nameof(PayloadSenderV2) + "." + nameof(SingleThreadTaskScheduler);
+
 			[ThreadStatic]
 			private static bool _isExecuting;
 
@@ -143,7 +147,7 @@ namespace Elastic.Apm.Report
 
 			public SingleThreadTaskScheduler(IApmLogger logger, CancellationToken cancellationToken)
 			{
-				_logger = logger?.Scoped(nameof(SingleThreadTaskScheduler));
+				_logger = logger?.Scoped(ThisClassName);
 				_cancellationToken = cancellationToken;
 				_taskQueue = new BlockingCollection<Task>();
 				Thread = new Thread(RunOnCurrentThread) { Name = ThreadName, IsBackground = true };
@@ -196,6 +200,8 @@ namespace Elastic.Apm.Report
 
 		private class EventsQueue
 		{
+			private const string ThisClassName = nameof(PayloadSenderV2) + "." + nameof(EventsQueue);
+
 			private readonly IAgentTimer _agentTimer;
 			private readonly TimeSpan _discardEventAge;
 			private readonly TimeSpan _flushInterval;
@@ -211,7 +217,7 @@ namespace Elastic.Apm.Report
 				IAgentTimer agentTimer
 			)
 			{
-				_logger = logger?.Scoped($"{nameof(PayloadSenderV2)}.{nameof(EventsQueue)}");
+				_logger = logger?.Scoped(ThisClassName);
 				_agentTimer = agentTimer;
 
 				_maxQueueEventCount = maxQueueEventCount;

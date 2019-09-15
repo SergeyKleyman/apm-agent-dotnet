@@ -7,12 +7,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using Elastic.Apm.Helpers;
 using Elastic.Apm.Logging;
+using Elastic.Apm.Tests.TestHelpers;
+using FluentAssertions;
 
 namespace Elastic.Apm.Tests.Mocks
 {
 	[DebuggerDisplay(nameof(_dbgName) + " = {" + nameof(_dbgName) + "}" + ", " + nameof(Now) + " = {" + nameof(Now) + "}")]
-	internal class MockAgentTimer : IAgentTimer
+	internal class MockAgentTimer : IAgentTimerForTesting
 	{
+		private const string ThisClassName = nameof(MockAgentTimer);
+
 		private readonly string _dbgName;
 		private readonly DelayItems _delayItems = new DelayItems();
 		private readonly AgentSpinLock _fastForwardSpinLock = new AgentSpinLock();
@@ -23,12 +27,10 @@ namespace Elastic.Apm.Tests.Mocks
 		{
 			Now = new AgentTimeInstant(this, TimeSpan.Zero);
 			_dbgName = dbgName ?? "#" + RuntimeHelpers.GetHashCode(this).ToString("X");
-			_logger = logger == null ? (IApmLogger)new NoopLogger() : logger.Scoped($"{nameof(MockAgentTimer)}-{_dbgName}");
+			_logger = logger == null ? (IApmLogger)new NoopLogger() : logger.Scoped($"{ThisClassName}-{_dbgName}");
 		}
 
-		internal int DelayItemsCount => _delayItems.Count;
-
-		internal IReadOnlyList<Task> DelayTasks => _delayItems.DelayTasks;
+		public bool IsMockTime => true;
 
 		public AgentTimeInstant Now
 		{
@@ -37,11 +39,17 @@ namespace Elastic.Apm.Tests.Mocks
 			private set => _delayItems.Now = value;
 		}
 
-		public async Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken)
+		public IReadOnlyList<Task> PendingDelayTasks => _delayItems.DelayTasks;
+
+		public int PendingDelayTasksCount => _delayItems.Count;
+
+		public async Task Delay(AgentTimeInstant relativeToInstant, TimeSpan delay, CancellationToken cancellationToken = default)
 		{
 			var totalMilliseconds = (long)delay.TotalMilliseconds;
 			if (totalMilliseconds < 0 || totalMilliseconds > int.MaxValue)
 				throw new ArgumentOutOfRangeException(nameof(delay), $"Invalid {nameof(delay)} argument value: {delay}");
+
+			relativeToInstant.IsCompatible(this).Should().BeTrue();
 
 			cancellationToken.ThrowIfCancellationRequested();
 
@@ -49,7 +57,7 @@ namespace Elastic.Apm.Tests.Mocks
 			var triggerTcs = new TaskCompletionSource<object>();
 
 			var (now, delayItemId) = _delayItems.Add(whenToTrigger, triggerTcs, cancellationToken);
-			if (! delayItemId.HasValue)
+			if (!delayItemId.HasValue)
 			{
 				_logger.Trace()?.Log($"Delay item already reached its trigger time. When to trigger: {whenToTrigger}. now: {now}.");
 				return;
@@ -88,6 +96,12 @@ namespace Elastic.Apm.Tests.Mocks
 			}
 		}
 
+		public void WaitForTimeToPassAndUntil(TimeSpan timeSpan, Func<bool> untilCondition = null, string dbgGoalDescription = null)
+		{
+			FastForward(timeSpan, dbgGoalDescription);
+			untilCondition?.Invoke().Should().BeTrue();
+		}
+
 		private void DelayCancelled(long delayItemId)
 		{
 			var delayItem = _delayItems.RemoveById(delayItemId);
@@ -104,7 +118,7 @@ namespace Elastic.Apm.Tests.Mocks
 		}
 
 		public override string ToString() =>
-			new ToStringBuilder(nameof(MockAgentTimer)) { { nameof(_dbgName), _dbgName }, { nameof(Now), Now } }.ToString();
+			new ToStringBuilder(ThisClassName) { { nameof(_dbgName), _dbgName }, { nameof(Now), Now } }.ToString();
 
 		private readonly struct DelayItem
 		{
@@ -144,7 +158,9 @@ namespace Elastic.Apm.Tests.Mocks
 				set => DoUnderLock(() => { _now = value; });
 			}
 
-			internal (AgentTimeInstant, long?) Add(AgentTimeInstant whenToTrigger, TaskCompletionSource<object> triggerTcs, CancellationToken cancellationToken) =>
+			internal (AgentTimeInstant, long?) Add(AgentTimeInstant whenToTrigger, TaskCompletionSource<object> triggerTcs,
+				CancellationToken cancellationToken
+			) =>
 				DoUnderLock(() =>
 				{
 					if (whenToTrigger <= _now) return (_now, (long?)null);
@@ -153,7 +169,7 @@ namespace Elastic.Apm.Tests.Mocks
 
 					var newItemIndex = _items.TakeWhile(item => whenToTrigger >= item.WhenToTrigger).Count();
 					_items.Insert(newItemIndex, new DelayItem(newItemId, whenToTrigger, triggerTcs, cancellationToken));
-					return  (_now, newItemId);
+					return (_now, newItemId);
 				});
 
 			internal DelayItem? RemoveById(long itemId) =>

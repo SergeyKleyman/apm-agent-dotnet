@@ -363,7 +363,7 @@ namespace Elastic.Apm.Tests
 
 				// After payload sender is stopped there should not be any pending delays
 				// TODO
-//				mockTimer.DelayItemsCount.Should().Be(0);
+//				mockTimer.PendingDelayTasksCount.Should().Be(0);
 			}
 
 			public class FlushIntervalTestArgs
@@ -564,7 +564,7 @@ namespace Elastic.Apm.Tests
 						++attemptCount;
 						if (verifyFunc())
 						{
-							_logger.Info()?.Log("Verification succeeded. attemptCount: {attemptCount}", attemptCount);
+							_logger.Info()?.Log($"Verification succeeded. attemptCount: {attemptCount}", attemptCount);
 							_mockBatchSender.Clear();
 							break;
 						}
@@ -592,7 +592,7 @@ namespace Elastic.Apm.Tests
 									+ $" timeToWaitBetweenChecks: {timeToWaitBetweenChecks}.");
 							elapsedOnLastWaitingLog = elapsedTime;
 						}
-						Thread.Sleep((int)timeToWaitBetweenChecks.TotalMilliseconds);
+						Thread.Sleep(timeToWaitBetweenChecks);
 					}
 				}
 

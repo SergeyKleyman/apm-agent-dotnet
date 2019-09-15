@@ -68,7 +68,7 @@ namespace Elastic.Apm.Helpers
 
 		private static void VerifyInstantsAreCompatible(AgentTimeInstant i1, AgentTimeInstant i2, [CallerMemberName] string caller = null)
 		{
-			if (i1._sourceAgentTimer == i2._sourceAgentTimer) return;
+			if (i1.IsCompatible(i2._sourceAgentTimer)) return;
 
 			var opName = caller == null ? "an operation" : $"operation {caller}";
 			throw new InvalidOperationException($"It's illegal to perform {opName} on two AgentTimeInstant instances " +
@@ -76,6 +76,8 @@ namespace Elastic.Apm.Helpers
 				$" The first AgentTimeInstant: timer: {i1._sourceAgentTimer}, value: {i1._elapsedSinceTimerStarted}." +
 				$" The second AgentTimeInstant: timer: {i2._sourceAgentTimer}, value: {i2._elapsedSinceTimerStarted}.");
 		}
+
+		internal bool IsCompatible(IAgentTimer otherAgentTimer) => _sourceAgentTimer == otherAgentTimer;
 
 		public override string ToString() => _elapsedSinceTimerStarted.ToString();
 
