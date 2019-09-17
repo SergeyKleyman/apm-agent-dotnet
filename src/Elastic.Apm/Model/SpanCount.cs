@@ -5,10 +5,10 @@ namespace Elastic.Apm.Model
 {
 	internal class SpanCount
 	{
-		private int _started;
 		private int _dropped;
-		public int Started => _started;
+		private int _started;
 		public int Dropped => _dropped;
+		public int Started => _started;
 
 		public void IncrementStarted() => Interlocked.Increment(ref _started);
 

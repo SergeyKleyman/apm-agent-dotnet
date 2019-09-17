@@ -6,7 +6,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,13 +16,13 @@ using Elastic.Apm.Config;
 using Elastic.Apm.Helpers;
 using Elastic.Apm.Logging;
 using Elastic.Apm.Model;
+using Elastic.Apm.Tests.Extensions;
 using Elastic.Apm.Tests.MockApmServer;
 using Elastic.Apm.Tests.TestHelpers;
 using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 using Xunit.Sdk;
-using Elastic.Apm.Tests.Extensions;
 
 namespace Elastic.Apm.AspNetFullFramework.Tests
 {
@@ -135,8 +134,6 @@ namespace Elastic.Apm.AspNetFullFramework.Tests
 		}
 
 		private TimedEvent? _sampleAppClientCallTiming;
-
-		protected IApmLogger ScopeBaseLogger(string scope) => Logger.Scoped(scope);
 
 		public Task InitializeAsync()
 		{
@@ -358,17 +355,6 @@ namespace Elastic.Apm.AspNetFullFramework.Tests
 		public static SampleAppUrlPathData RandomSampleAppUrlPath() =>
 			SampleAppUrlPaths.AllPaths[RandomGenerator.GetInstance().Next(0, SampleAppUrlPaths.AllPaths.Count)];
 
-		private static string GetCurrentTestDisplayName(ITestOutputHelper xUnitOutputHelper)
-		{
-			var helper = (TestOutputHelper)xUnitOutputHelper;
-
-			// ReSharper disable once PossibleNullReferenceException
-			var test = (ITest)helper.GetType()
-				.GetField("test", BindingFlags.NonPublic | BindingFlags.Instance)
-				.GetValue(helper);
-			return test.DisplayName;
-		}
-
 		private void LogSampleAppLogFileContent()
 		{
 			if (!_sampleAppLogEnabled)
@@ -572,7 +558,7 @@ namespace Elastic.Apm.AspNetFullFramework.Tests
 			if (_sampleAppClientCallTiming != null) timedDto.ShouldOccurBetween(_sampleAppClientCallTiming);
 		}
 
-		private void FullFwAssertValid(SpanCountDto spanCount)
+		private static void FullFwAssertValid(SpanCountDto spanCount)
 		{
 			spanCount.Should().NotBeNull();
 

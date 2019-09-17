@@ -7,10 +7,8 @@ namespace Elastic.Apm.Config
 	public interface IConfigurationReader
 	{
 		string CaptureBody { get; }
-
 		List<string> CaptureBodyContentTypes { get; }
 		bool CaptureHeaders { get; }
-		string Environment { get; }
 
 		/// <summary>
 		/// Events older than this age are discarded when the queue is full and it's necessary to free up space for a new event.
@@ -30,6 +28,8 @@ namespace Elastic.Apm.Config
 		/// Default value: <seealso cref="ConfigConsts.DefaultValues.DiscardEventAgeInMilliseconds" />
 		/// </summary>
 		TimeSpan DiscardEventAge { get; }
+
+		string Environment { get; }
 
 		/// <summary>
 		/// The maximal amount of time (in seconds) events are held in queue until there is enough to send a batch.

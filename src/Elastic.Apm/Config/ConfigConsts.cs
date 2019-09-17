@@ -15,6 +15,7 @@ namespace Elastic.Apm.Config
 			public const int ApmServerPort = 8200;
 			public const string CaptureBody = SupportedValues.CaptureBodyOff;
 			public const string CaptureBodyContentTypes = "application/x-www-form-urlencoded*, text/*, application/json*, application/xml*";
+			public const int DiscardEventAgeInMilliseconds = 30_000; // 30 seconds
 			public const int FlushIntervalInMilliseconds = 10_000; // 10 seconds
 			public const int MaxBatchEventCount = 10;
 			public const int MaxQueueEventCount = 1000;
@@ -26,7 +27,6 @@ namespace Elastic.Apm.Config
 			public const double TransactionSampleRate = 1.0;
 			public const string UnknownServiceName = "unknown";
 			public static Uri ServerUri => new Uri($"http://localhost:{ApmServerPort}");
-			public const int DiscardEventAgeInMilliseconds = 30_000; // 30 seconds
 		}
 
 		public static class EnvVarNames
@@ -35,6 +35,7 @@ namespace Elastic.Apm.Config
 			public const string CaptureBodyContentTypes = Prefix + "CAPTURE_BODY_CONTENT_TYPES";
 
 			public const string CaptureHeaders = Prefix + "CAPTURE_HEADERS";
+			public const string DiscardEventAge = Prefix + "DISCARD_EVENT_AGE";
 			public const string Environment = Prefix + "ENVIRONMENT";
 			public const string FlushInterval = Prefix + "FLUSH_INTERVAL";
 			public const string LogLevel = Prefix + "LOG_LEVEL";
@@ -49,7 +50,6 @@ namespace Elastic.Apm.Config
 			public const string SpanFramesMinDuration = Prefix + "SPAN_FRAMES_MIN_DURATION";
 			public const string StackTraceLimit = Prefix + "STACK_TRACE_LIMIT";
 			public const string TransactionSampleRate = Prefix + "TRANSACTION_SAMPLE_RATE";
-			public const string DiscardEventAge = Prefix + "DISCARD_EVENT_AGE";
 		}
 
 		public static class SupportedValues
