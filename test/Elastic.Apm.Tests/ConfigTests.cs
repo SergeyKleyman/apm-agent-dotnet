@@ -145,24 +145,26 @@ namespace Elastic.Apm.Tests
 		[Fact]
 		public void CaptureBodyConfigTest()
 		{
-			var agent = new ApmAgent(new TestAgentComponents(captureBody: ConfigConsts.SupportedValues.CaptureBodyOff));
-			agent.ConfigurationReader.CaptureBody.Should().Be(ConfigConsts.SupportedValues.CaptureBodyOff);
+			// ReSharper disable once RedundantArgumentDefaultValue
+			var agent = new ApmAgent(new TestAgentComponents(captureBody: SupportedValues.CaptureBodyOff));
+			agent.ConfigurationReader.CaptureBody.Should().Be(SupportedValues.CaptureBodyOff);
 
-			agent = new ApmAgent(new TestAgentComponents(captureBody: ConfigConsts.SupportedValues.CaptureBodyAll));
-			agent.ConfigurationReader.CaptureBody.Should().Be(ConfigConsts.SupportedValues.CaptureBodyAll);
+			agent = new ApmAgent(new TestAgentComponents(captureBody: SupportedValues.CaptureBodyAll));
+			agent.ConfigurationReader.CaptureBody.Should().Be(SupportedValues.CaptureBodyAll);
 
-			agent = new ApmAgent(new TestAgentComponents(captureBody: ConfigConsts.SupportedValues.CaptureBodyErrors));
-			agent.ConfigurationReader.CaptureBody.Should().Be(ConfigConsts.SupportedValues.CaptureBodyErrors);
+			agent = new ApmAgent(new TestAgentComponents(captureBody: SupportedValues.CaptureBodyErrors));
+			agent.ConfigurationReader.CaptureBody.Should().Be(SupportedValues.CaptureBodyErrors);
 
-			agent = new ApmAgent(new TestAgentComponents(captureBody: ConfigConsts.SupportedValues.CaptureBodyTransactions));
-			agent.ConfigurationReader.CaptureBody.Should().Be(ConfigConsts.SupportedValues.CaptureBodyTransactions);
+			agent = new ApmAgent(new TestAgentComponents(captureBody: SupportedValues.CaptureBodyTransactions));
+			agent.ConfigurationReader.CaptureBody.Should().Be(SupportedValues.CaptureBodyTransactions);
 		}
 
 		[Fact]
 		public void CaptureBodyContentTypesConfigTest()
 		{
+			// ReSharper disable once RedundantArgumentDefaultValue
 			var agent = new ApmAgent(new TestAgentComponents(captureBodyContentTypes: DefaultValues.CaptureBodyContentTypes));
-			var expected = new List<string>() { "application/x-www-form-urlencoded*", "text/*", "application/json*", "application/xml*"};
+			var expected = new List<string>() { "application/x-www-form-urlencoded*", "text/*", "application/json*", "application/xml*" };
 			agent.ConfigurationReader.CaptureBodyContentTypes.Should().HaveCount(4);
 			agent.ConfigurationReader.CaptureBodyContentTypes.Should().BeEquivalentTo(expected);
 		}
@@ -176,11 +178,11 @@ namespace Elastic.Apm.Tests
 		}
 
 		[Fact]
-
 		public void SetCaptureBodyTest()
 		{
 			//Possible values : "off", "all", "errors", "transactions"
-			foreach (var value in SupportedValues.CaptureBodySupportedValues){
+			foreach (var value in SupportedValues.CaptureBodySupportedValues)
+			{
 				Environment.SetEnvironmentVariable(EnvVarNames.CaptureBody, value);
 				var config = new EnvironmentConfigurationReader();
 				config.CaptureBody.Should().Be(value);
@@ -198,7 +200,8 @@ namespace Elastic.Apm.Tests
 			config.CaptureBodyContentTypes.Should().HaveCount(1);
 			config.CaptureBodyContentTypes[0].Should().Be(contentType);
 
-			Environment.SetEnvironmentVariable(EnvVarNames.CaptureBodyContentTypes, "application/x-www-form-urlencoded*, text/*, application/json*, application/xml*");
+			Environment.SetEnvironmentVariable(EnvVarNames.CaptureBodyContentTypes,
+				"application/x-www-form-urlencoded*, text/*, application/json*, application/xml*");
 			config = new EnvironmentConfigurationReader();
 			config.CaptureBodyContentTypes.Should().HaveCount(4);
 			config.CaptureBodyContentTypes[0].Should().Be("application/x-www-form-urlencoded*");
@@ -345,7 +348,8 @@ namespace Elastic.Apm.Tests
 			agent.Tracer.CaptureTransaction("TestTransactionName", "TestTransactionType", t => { Thread.Sleep(2); });
 
 			agent.Service.Name.Should().NotBe(serviceName);
-			agent.Service.Name.Should().MatchRegex("^[a-zA-Z0-9 _-]+$")
+			agent.Service.Name.Should()
+				.MatchRegex("^[a-zA-Z0-9 _-]+$")
 				.And.Be("MyService123_");
 		}
 

@@ -77,19 +77,19 @@ namespace Elastic.Apm.Report
 
 		internal Thread Thread => _singleThreadTaskScheduler.Thread;
 
-		public void QueueTransaction(ITransaction transaction) => QueueEvent(transaction, transaction.Id, "Transaction");
+		public void QueueTransaction(ITransaction transaction) => EnqueueEvent(transaction, transaction.Id, "Transaction");
 
-		public void QueueSpan(ISpan span) => QueueEvent(span, span.Id, "Span");
+		public void QueueSpan(ISpan span) => EnqueueEvent(span, span.Id, "Span");
 
-		public void QueueMetrics(IMetricSet metricSet) => QueueEvent(metricSet, TimeUtils.FormatTimestampForLog(metricSet.TimeStamp), "MetricSet");
+		public void QueueMetrics(IMetricSet metricSet) => EnqueueEvent(metricSet, TimeUtils.FormatTimestampForLog(metricSet.TimeStamp), "MetricSet");
 
-		public void QueueError(IError error) => QueueEvent(error, error.Id, "Error");
+		public void QueueError(IError error) => EnqueueEvent(error, error.Id, "Error");
 
-		private void QueueEvent(object eventObj, string dbgEventObjId, string dbgEventKind)
+		internal bool EnqueueEvent(object eventObj, string dbgEventObjId, string dbgEventKind)
 		{
 			ThrowIfDisposed();
 
-			_eventsQueue.Enqueue(eventObj, dbgEventObjId, dbgEventKind);
+			return _eventsQueue.Enqueue(eventObj, dbgEventObjId, dbgEventKind);
 		}
 
 		private async Task DoWork()
@@ -278,7 +278,7 @@ namespace Elastic.Apm.Report
 				return _queue.Count == _maxQueueEventCount;
 			}
 
-			internal void Enqueue(object eventObj, string dbgEventObjId, string dbgEventKind) =>
+			internal bool Enqueue(object eventObj, string dbgEventObjId, string dbgEventKind) =>
 				DoUnderLock(() =>
 				{
 					var now = _agentTimer.Now;
@@ -299,7 +299,7 @@ namespace Elastic.Apm.Report
 									+ " Event kind: {EventKind}, ID: {EventId}, event: {Event}."
 									+ " Current state: {EventsQueueCurrentState}.",
 									dbgEventKind, dbgEventObjId, eventObj, DbgCurrentStateToString());
-							return;
+							return false;
 						}
 					}
 
@@ -314,7 +314,7 @@ namespace Elastic.Apm.Report
 					if (_pendingReceiveTcs == null)
 					{
 						_logger.Trace()?.Log("There is no pending receive to notify");
-						return;
+						return true;
 					}
 
 					if (queueWasEmptyBefore || _queue.Count >= _maxBatchEventCount)
@@ -326,10 +326,11 @@ namespace Elastic.Apm.Report
 						var trySetResultRetVal =_pendingReceiveTcs.TrySetResult(null);
 						if (! trySetResultRetVal)
 							_logger.Trace()?.Log("Pending receive was already notified before but it still didn't handle the previous notification");
-						return;
+						return true;
 					}
 
 					_logger.Trace()?.Log("There was no change that requires notifying pending receive");
+					return true;
 				});
 
 			internal async Task ReceiveAsync(List<object> listToFill, CancellationToken cancellationToken)
@@ -370,9 +371,7 @@ namespace Elastic.Apm.Report
 				}
 			}
 
-			private TimeSpan? TryReceive(List<object> listToFill, long dbgIterationCount, AgentTimeInstant now)
-			{
-				TimeSpan? timeUntilNextFlush = null;
+			private TimeSpan? TryReceive(List<object> listToFill, long dbgIterationCount, AgentTimeInstant now) =>
 				DoUnderLock(() =>
 				{
 					// ReSharper disable once AccessToModifiedClosure
@@ -389,11 +388,11 @@ namespace Elastic.Apm.Report
 					if (!listToFill.IsEmpty())
 					{
 						_pendingReceiveTcs = null;
-						return;
+						return null;
 					}
 
 					_pendingReceiveTcs = new TaskCompletionSource<object>();
-					timeUntilNextFlush = CalcTimeLeftToNextFlush(now);
+					var timeUntilNextFlush = CalcTimeLeftToNextFlush(now);
 
 					_logger.Trace()
 						?.Log("Awaiting data to become available..."
@@ -403,9 +402,8 @@ namespace Elastic.Apm.Report
 							dbgIterationCount,
 							timeUntilNextFlush?.ToString() ?? "N/A (queue is empty)",
 							DbgCurrentStateToString());
+					return timeUntilNextFlush;
 				});
-				return timeUntilNextFlush;
-			}
 
 			private void TryToFreeSpace(AgentTimeInstant now)
 			{
@@ -476,7 +474,7 @@ namespace Elastic.Apm.Report
 				assert.That(_queue.Count <= _maxQueueEventCount,
 					$"_queue.Count <= _maxQueueEventCount. Current state: {DbgCurrentStateToString()}");
 
-				if (Assertion.IsOnLevelEnabled) AssertValidOnLevel();
+				if (Assertion.Is_O_n_LevelEnabled) AssertValidOnLevel();
 
 				void AssertValidOnLevel()
 				{
@@ -499,14 +497,14 @@ namespace Elastic.Apm.Report
 				}
 			}
 
-			private void DoUnderLock(Action doAction)
+			private TResult DoUnderLock<TResult>(Func<TResult> doFunc)
 			{
 				lock (_lock)
 				{
 					AssertValid();
 					try
 					{
-						doAction();
+						return doFunc();
 					}
 					finally
 					{

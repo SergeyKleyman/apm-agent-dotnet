@@ -20,9 +20,9 @@ namespace Elastic.Apm.AspNetFullFramework.Tests
 		public async Task CustomSpanThrowsTest()
 		{
 			var errorPageData = SampleAppUrlPaths.CustomSpanThrowsExceptionPage;
-			await SendGetRequestToSampleAppAndVerifyResponseStatusCode(errorPageData.RelativeUrlPath, errorPageData.StatusCode);
+			await SendGetRequestToSampleAppAndVerifyResponse(errorPageData.RelativeUrlPath, errorPageData.StatusCode);
 
-			VerifyDataReceivedFromAgent(receivedData =>
+			await VerifyDataReceivedFromAgent(receivedData =>
 			{
 				TryVerifyDataReceivedFromAgent(errorPageData, receivedData);
 
@@ -52,12 +52,28 @@ namespace Elastic.Apm.AspNetFullFramework.Tests
 		}
 
 		[AspNetFullFrameworkFact]
+		public async Task HttpCallWithResponseForbidden()
+		{
+			var forbidResponsePageData = SampleAppUrlPaths.ForbidHttpResponsePageDescriptionPage;
+			await SendGetRequestToSampleAppAndVerifyResponse(forbidResponsePageData.RelativeUrlPath, forbidResponsePageData.StatusCode);
+
+			await VerifyDataReceivedFromAgent(receivedData =>
+			{
+				TryVerifyDataReceivedFromAgent(forbidResponsePageData, receivedData);
+
+				receivedData.Spans.First().Should().NotBeNull();
+				receivedData.Spans.First().Context.Http.Should().NotBeNull();
+				receivedData.Spans.First().Context.Http.StatusCode.Should().Be(403);
+			});
+		}
+
+		[AspNetFullFrameworkFact]
 		public async Task CustomChildSpanThrowsTest()
 		{
 			var errorPageData = SampleAppUrlPaths.CustomChildSpanThrowsExceptionPage;
-			await SendGetRequestToSampleAppAndVerifyResponseStatusCode(errorPageData.RelativeUrlPath, errorPageData.StatusCode);
+			await SendGetRequestToSampleAppAndVerifyResponse(errorPageData.RelativeUrlPath, errorPageData.StatusCode);
 
-			VerifyDataReceivedFromAgent(receivedData =>
+			await VerifyDataReceivedFromAgent(receivedData =>
 			{
 				TryVerifyDataReceivedFromAgent(errorPageData, receivedData);
 

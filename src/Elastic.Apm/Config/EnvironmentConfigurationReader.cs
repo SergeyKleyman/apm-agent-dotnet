@@ -28,7 +28,9 @@ namespace Elastic.Apm.Config
 
 		public bool CaptureHeaders => ParseCaptureHeaders(Read(ConfigConsts.EnvVarNames.CaptureHeaders));
 
-		public TimeSpan DiscardEventAge => ParseFlushInterval(Read(ConfigConsts.EnvVarNames.DiscardEventAge));
+		public TimeSpan DiscardEventAge => ParseDiscardEventAge(Read(ConfigConsts.EnvVarNames.DiscardEventAge));
+
+		public string Environment => ParseEnvironment(Read(ConfigConsts.EnvVarNames.Environment));
 
 		public TimeSpan FlushInterval => ParseFlushInterval(Read(ConfigConsts.EnvVarNames.FlushInterval));
 
@@ -55,6 +57,6 @@ namespace Elastic.Apm.Config
 		public double TransactionSampleRate => ParseTransactionSampleRate(Read(ConfigConsts.EnvVarNames.TransactionSampleRate));
 
 		private static ConfigurationKeyValue Read(string key) =>
-			new ConfigurationKeyValue(key, Environment.GetEnvironmentVariable(key)?.Trim(), Origin);
+			new ConfigurationKeyValue(key, System.Environment.GetEnvironmentVariable(key)?.Trim(), Origin);
 	}
 }

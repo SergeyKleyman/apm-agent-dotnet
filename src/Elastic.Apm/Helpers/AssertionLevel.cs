@@ -3,7 +3,7 @@ namespace Elastic.Apm.Helpers
 	internal enum AssertionLevel
 	{
 		Disabled = 0,
-		O1 = 1,
-		On = 2
+		O_1 = 1,
+		O_n = 2
 	}
 }

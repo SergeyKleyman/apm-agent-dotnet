@@ -23,6 +23,7 @@ using Xunit;
 using Xunit.Abstractions;
 using Xunit.Sdk;
 using static Elastic.Apm.Tests.TestHelpers.FluentAssertionsUtils;
+// ReSharper disable ImplicitlyCapturedClosure
 
 namespace Elastic.Apm.Tests
 {
@@ -30,18 +31,29 @@ namespace Elastic.Apm.Tests
 	{
 		public PayloadSenderTests(ITestOutputHelper xUnitOutputHelper) : base(xUnitOutputHelper, nameof(PayloadSenderTests)) { }
 
-		[Fact]
-		public Task Dispose_stops_the_thread() =>
-			CreateObjectsAndTest((payloadSender, _) =>
+		[Theory]
+		[InlineData(0)]
+		[InlineData(1)]
+		[InlineData(2)]
+		[InlineData(ConfigConsts.DefaultValues.MaxBatchEventCount - 1)]
+		[InlineData(ConfigConsts.DefaultValues.MaxBatchEventCount)]
+		[InlineData(ConfigConsts.DefaultValues.MaxBatchEventCount + 1)]
+		[InlineData(ConfigConsts.DefaultValues.MaxQueueEventCount - 1)]
+		[InlineData(ConfigConsts.DefaultValues.MaxQueueEventCount)]
+		[InlineData(ConfigConsts.DefaultValues.MaxQueueEventCount + 1)]
+		public void Dispose_stops_the_thread(int numberOfEventsToEnqueue) =>
+			CreateObjectsAndTest((payloadSender, agent) =>
 			{
+				// ReSharper disable AccessToDisposedClosure
 				payloadSender.Thread.IsAlive.Should().BeTrue();
+				numberOfEventsToEnqueue.Repeat(() => payloadSender.QueueTransaction(CreateDummyTransaction(agent)));
 				payloadSender.Dispose();
 				payloadSender.Thread.IsAlive.Should().BeFalse();
-				return Task.CompletedTask;
+				// ReSharper restore AccessToDisposedClosure
 			});
 
 		[Fact]
-		public Task calling_after_Dispose_throws() =>
+		public void calling_after_Dispose_throws() =>
 			CreateObjectsAndTest((payloadSender, agent) =>
 			{
 				payloadSender.QueueTransaction(CreateDummyTransaction(agent));
@@ -50,7 +62,6 @@ namespace Elastic.Apm.Tests
 					.Should()
 					.ThrowExactly<ObjectDisposedException>()
 					.WithMessage($"*{nameof(PayloadSenderV2)}*");
-				return Task.CompletedTask;
 			});
 
 		[Theory]
@@ -116,24 +127,53 @@ namespace Elastic.Apm.Tests
 			});
 		}
 
-		private async Task CreateObjectsAndTest(Func<PayloadSenderV2, ApmAgent, Task> test, IConfigurationReader configurationReaderArg = null,
-			HttpMessageHandler httpMessageHandler = null
+		private static async Task CreateObjectsAndTest(IApmLogger logger, Func<PayloadSenderV2, ApmAgent, Task> test
+			, IConfigurationReader configurationReaderArg = null
+			, HttpMessageHandler httpMessageHandler = null
 		)
 		{
-			var configurationReader = configurationReaderArg ?? new TestAgentConfigurationReader(Logger);
+			var configurationReader = configurationReaderArg ?? new TestAgentConfigurationReader(logger);
 			var system = new Api.System();
-			var service = Service.GetDefaultService(configurationReader, Logger);
-			var batchSender = new BatchSender(Logger, configurationReader, service, system, httpMessageHandler);
+			var service = Service.GetDefaultService(configurationReader, logger);
+			var batchSender = new BatchSender(logger, configurationReader, service, system, httpMessageHandler);
 
-			using (var payloadSender = new PayloadSenderV2(Logger, configurationReader, service, system, batchSender))
-			using (var agent = new ApmAgent(new TestAgentComponents(payloadSender: payloadSender)))
-				await test(payloadSender, agent);
+			using (var payloadSender = new PayloadSenderV2(logger, configurationReader, service, system, batchSender))
+			{
+				payloadSender.Thread.IsAlive.Should().BeTrue();
+
+				using (var agent = new ApmAgent(new TestAgentComponents(payloadSender: payloadSender)))
+					await test(payloadSender, agent);
+
+				payloadSender.Thread.IsAlive.Should().BeFalse();
+			}
 		}
 
 		private Task CreateObjectsAndTest(IConfigurationReader configurationReader, HttpMessageHandler httpMessageHandler,
 			Func<PayloadSenderV2, ApmAgent, Task> test
 		) =>
-			CreateObjectsAndTest(test, configurationReader, httpMessageHandler);
+			CreateObjectsAndTest(Logger, test, configurationReader, httpMessageHandler);
+
+		private static void CreateObjectsAndTest(IApmLogger logger, Action<PayloadSenderV2, ApmAgent> test
+			, IConfigurationReader configurationReader = null
+			, HttpMessageHandler httpMessageHandler = null
+		) =>
+			CreateObjectsAndTest(logger, (payloadSender, agent) =>
+				{
+					test(payloadSender, agent);
+					return Task.CompletedTask;
+				}, configurationReader, httpMessageHandler)
+				.Wait();
+
+		private void CreateObjectsAndTest(Action<PayloadSenderV2, ApmAgent> test
+			, IConfigurationReader configurationReader = null
+			, HttpMessageHandler httpMessageHandler = null
+		) =>
+			CreateObjectsAndTest(Logger, (payloadSender, agent) =>
+				{
+					test(payloadSender, agent);
+					return Task.CompletedTask;
+				}, configurationReader, httpMessageHandler)
+				.Wait();
 
 		private Task CreateObjectsAndTest(HttpMessageHandler httpMessageHandler, Func<PayloadSenderV2, ApmAgent, Task> test) =>
 			CreateObjectsAndTest(new TestAgentConfigurationReader(Logger, flushInterval: "1s"), httpMessageHandler, test);
@@ -335,6 +375,7 @@ namespace Elastic.Apm.Tests
 							}
 						}
 
+						// ReSharper disable once InvertIf
 						if (eventCountToSecondFlushRemainder != 0)
 						{
 							sutEnv.MockTimer.FastForward(args.FlushInterval / 2, "2nd flush");
@@ -354,12 +395,8 @@ namespace Elastic.Apm.Tests
 
 				using (var payloadSender = new PayloadSenderV2(Logger, configurationReader, service, new Api.System()
 					, mockBatchSender, mockTimer))
-				{
-					using (var agent = new ApmAgent(new TestAgentComponents(payloadSender: payloadSender)))
-					{
-						test(new SutEnv(payloadSender, agent, mockTimer, this, mockBatchSender));
-					}
-				}
+				using (var agent = new ApmAgent(new TestAgentComponents(payloadSender: payloadSender)))
+					test(new SutEnv(payloadSender, agent, mockTimer, this, mockBatchSender));
 
 				// After payload sender is stopped there should not be any pending delays
 				// TODO
@@ -403,10 +440,10 @@ namespace Elastic.Apm.Tests
 				internal readonly MockAgentTimer MockTimer;
 				internal readonly PayloadSenderV2 PayloadSender;
 				private readonly Queue<EventData> _eventsQueuedByTest = new Queue<EventData>();
-				private readonly IApmLogger _logger;
 				private readonly MockBatchSender _mockBatchSender;
 				private readonly MockedTimeTests _mockedTimeTests;
 				private readonly ThreadSafeLongCounter _testEventIndexCounter = new ThreadSafeLongCounter();
+				private readonly IApmLogger _logger;
 
 				internal SutEnv(PayloadSenderV2 payloadSender, ApmAgent agent, MockAgentTimer mockTimer, MockedTimeTests mockedTimeTests
 					, MockBatchSender mockBatchSender
@@ -615,6 +652,272 @@ namespace Elastic.Apm.Tests
 					internal readonly object EventObject;
 					internal readonly long TestEventIndex;
 				}
+			}
+		}
+
+		public class RealTimeTests : LoggingTestBase
+		{
+			private static readonly IEnumerable<TimeSpan?> FlushIntervalVariants = new TimeSpan?[]
+			{
+				null, ConfigConsts.DefaultValues.FlushIntervalInMilliseconds.Milliseconds(), TimeSpan.Zero, 10.Milliseconds(), 100.Milliseconds(),
+				1.Seconds(), 1.Hours(), 1.Days()
+			};
+
+			private static readonly TimeSpan VeryLongFlushInterval = 1.Hours();
+			private static readonly TimeSpan VeryShortFlushInterval = 1.Seconds();
+
+			public RealTimeTests(ITestOutputHelper xUnitOutputHelper) : base(xUnitOutputHelper) { }
+
+			private static IEnumerable<TestArgs> TestArgsVariantsWithVeryLongFlushInterval =>
+				TestArgsVariants(args => args.FlushInterval.HasValue && args.FlushInterval >= VeryLongFlushInterval);
+
+			private static IEnumerable<TestArgs> TestArgsVariantsWithoutIndex()
+			{
+				yield return new TestArgs();
+
+				var maxQueueEventCountVariants = new int?[] { null, 1, 2, 3, 10, ConfigConsts.DefaultValues.MaxQueueEventCount };
+				var batchVsQueueCountDeltas = new[] { -2, -1, 0 };
+
+				foreach (var flushInterval in FlushIntervalVariants)
+				{
+					foreach (var maxQueueEventCount in maxQueueEventCountVariants)
+					{
+						if (maxQueueEventCount == null) continue;
+
+						foreach (var delta in batchVsQueueCountDeltas)
+						{
+							var maxBatchEventCount = maxQueueEventCount + delta;
+							if (maxBatchEventCount < 1) continue;
+
+							yield return new TestArgs
+							{
+								FlushInterval = flushInterval, MaxBatchEventCount = maxBatchEventCount, MaxQueueEventCount = maxQueueEventCount
+							};
+						}
+					}
+				}
+			}
+
+			private static IEnumerable<TestArgs> TestArgsVariants(Func<TestArgs, bool> predicate = null)
+			{
+				var counter = 0;
+				foreach (var argsVariant in TestArgsVariantsWithoutIndex())
+				{
+					if (predicate != null && !predicate(argsVariant)) continue;
+
+					argsVariant.ArgsIndex = ++counter;
+					yield return argsVariant;
+				}
+			}
+
+			private static bool EnqueueDummyEvent(PayloadSenderV2 payloadSender, ApmAgent agent, int txIndex)
+			{
+				var tx = new Transaction(agent, $"Tx #{txIndex}", "TestType");
+				return payloadSender.EnqueueEvent(tx, tx.Id, "Transaction");
+			}
+
+			[Fact]
+			internal void MaxQueueEventCount_should_be_enforced_before_send()
+			{
+				foreach (var args in TestArgsVariantsWithVeryLongFlushInterval)
+				{
+					Logger.Debug()?.Log("Starting sub-test... args: {args}", args);
+
+					var sendTcs = new TaskCompletionSource<object>();
+
+					var handler = new MockHttpMessageHandler(async (r, c) =>
+					{
+						await sendTcs.Task;
+						return new HttpResponseMessage(HttpStatusCode.OK);
+					});
+
+					var configurationReader = args.BuildConfigurationReader(Logger);
+
+					CreateObjectsAndTest((payloadSender, agent) =>
+						{
+							int? txIndexResumedEnqueuing = null;
+							for (var txIndex = 1; txIndex <= args.MaxQueueEventCount + args.MaxBatchEventCount + 10; ++txIndex)
+							{
+								var enqueuedSuccessfully = EnqueueDummyEvent(payloadSender, agent, txIndex);
+
+								if (txIndex <= args.MaxQueueEventCount)
+								{
+									enqueuedSuccessfully.Should().BeTrue($"txIndex: {txIndex}, args: {args}");
+									continue;
+								}
+
+								// It's possible that the events for the first batch have already been dequeued
+								// so we can be sure that queue doesn't have any free space left only after MaxQueueEventCount + MaxBatchEventCount events
+
+								if (enqueuedSuccessfully && !txIndexResumedEnqueuing.HasValue) txIndexResumedEnqueuing = txIndex;
+
+								enqueuedSuccessfully.Should()
+									.Be(txIndex - txIndexResumedEnqueuing < args.MaxBatchEventCount
+										, $"txIndex: {txIndex}, txIndexResumedEnqueuing: {txIndexResumedEnqueuing}, args: {args}");
+							}
+
+							sendTcs.SetResult(null);
+						}
+						, configurationReader, handler);
+				}
+			}
+
+			[Fact]
+			public async Task MaxQueueEventCount_should_be_enforced_after_send()
+			{
+				foreach (var args in TestArgsVariantsWithVeryLongFlushInterval)
+				{
+					Logger.Debug()?.Log("Starting sub-test... args: {args}", args);
+
+					var sendTcs = new TaskCompletionSource<object>();
+					var firstBatchDequeuedTcs = new TaskCompletionSource<object>();
+
+					var handler = new MockHttpMessageHandler(async (r, c) =>
+					{
+						firstBatchDequeuedTcs.SetResult(null);
+						await sendTcs.Task;
+						return new HttpResponseMessage(HttpStatusCode.OK);
+					});
+
+					var configurationReader = args.BuildConfigurationReader(Logger);
+
+					await CreateObjectsAndTest(async (payloadSender, agent) =>
+						{
+							var txIndex = 1;
+							for (; txIndex <= args.MaxQueueEventCount; ++txIndex)
+								EnqueueDummyEvent(payloadSender, agent, txIndex).Should().BeTrue($"txIndex: {txIndex}, args: {args}");
+
+							await firstBatchDequeuedTcs.Task;
+
+							for (; txIndex <= args.MaxQueueEventCount + args.MaxBatchEventCount + 10; ++txIndex)
+							{
+								EnqueueDummyEvent(payloadSender, agent, txIndex)
+									.Should()
+									.Be(txIndex <= args.MaxQueueEventCount + args.MaxBatchEventCount
+										, $"txIndex: {txIndex}, args: {args}");
+							}
+
+							sendTcs.SetResult(null);
+						}
+						, configurationReader, handler);
+				}
+			}
+
+			[Fact]
+			public async Task MaxBatchEventCount_test()
+			{
+				var numberOfBatchesVariants = new[] { 1, 2, 3, 10 };
+
+				foreach (var args in TestArgsVariantsWithVeryLongFlushInterval)
+				{
+					foreach (var expectedNumberOfBatches in numberOfBatchesVariants)
+					{
+						Logger.Debug()?.Log("Starting sub-test... args: {args}", args);
+
+						var expectedNumberOfBatchesSentTcs = new TaskCompletionSource<object>();
+
+						var actualNumberOfBatches = 0;
+						var handler = new MockHttpMessageHandler((r, c) =>
+						{
+							if (Interlocked.Increment(ref actualNumberOfBatches) == expectedNumberOfBatches)
+								expectedNumberOfBatchesSentTcs.SetResult(null);
+							return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+						});
+
+						var configurationReader = args.BuildConfigurationReader(Logger);
+
+						await CreateObjectsAndTest(async (payloadSender, agent) =>
+							{
+								var numberOfEventsEnqueuedSuccessfully = 0;
+								for (var txIndex = 1;; ++txIndex)
+								{
+									if (EnqueueDummyEvent(payloadSender, agent, txIndex))
+										++numberOfEventsEnqueuedSuccessfully;
+									else
+										Thread.Yield();
+
+									if (numberOfEventsEnqueuedSuccessfully == expectedNumberOfBatches * args.MaxBatchEventCount)
+										break;
+								}
+
+								(await Task.WhenAny(expectedNumberOfBatchesSentTcs.Task, Task.Delay(30.Seconds())))
+									.Should()
+									.Be(expectedNumberOfBatchesSentTcs.Task
+										, $"because numberOfEventsEnqueuedSuccessfully: {numberOfEventsEnqueuedSuccessfully}");
+							}
+							, configurationReader, handler);
+					}
+				}
+			}
+
+			[Fact]
+			public void FlushInterval_test()
+			{
+				var argsVariantsCounter = 0;
+				var numberOfEventsToSendVariants = new[] { 1, 2, 3, 10 };
+
+				foreach (var flushInterval in FlushIntervalVariants.Where(x => x.HasValue && x.Value <= VeryShortFlushInterval))
+				{
+					foreach (var numberOfEventsToSend in numberOfEventsToSendVariants)
+					{
+						var args = new TestArgs { ArgsIndex = ++argsVariantsCounter, FlushInterval = flushInterval };
+						Logger.Debug()?.Log("Starting sub-test... args: {args}", args);
+
+						var batchSentBarrier = new Barrier(2);
+						var barrierTimeout = 30.Seconds();
+
+						var handler = new MockHttpMessageHandler((r, c) =>
+						{
+							batchSentBarrier.SignalAndWait(barrierTimeout).Should().BeTrue();
+							return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+						});
+
+						var configurationReader = new TestArgs { FlushInterval = flushInterval }.BuildConfigurationReader(Logger);
+
+						CreateObjectsAndTest((payloadSender, agent) =>
+						{
+							for (var txIndex = 1; txIndex <= numberOfEventsToSend; ++txIndex)
+							{
+								EnqueueDummyEvent(payloadSender, agent, txIndex).Should().BeTrue($"txIndex: {txIndex}, args: {args}");
+								batchSentBarrier.SignalAndWait(barrierTimeout).Should().BeTrue($"txIndex: {txIndex}, args: {args}");
+							}
+						}, configurationReader, handler);
+					}
+				}
+			}
+
+			private void CreateObjectsAndTest(Action<PayloadSenderV2, ApmAgent> test
+				, IConfigurationReader configurationReader = null
+				, HttpMessageHandler httpMessageHandler = null
+			) =>
+				PayloadSenderTests.CreateObjectsAndTest(Logger, test, configurationReader, httpMessageHandler);
+
+			private Task CreateObjectsAndTest(Func<PayloadSenderV2, ApmAgent, Task> test
+				, IConfigurationReader configurationReader = null
+				, HttpMessageHandler httpMessageHandler = null
+			) =>
+				PayloadSenderTests.CreateObjectsAndTest(Logger, test, configurationReader, httpMessageHandler);
+
+			internal class TestArgs
+			{
+				internal int ArgsIndex { get; set; }
+				internal TimeSpan? FlushInterval { get; set; }
+				internal int? MaxBatchEventCount { get; set; }
+				internal int? MaxQueueEventCount { get; set; }
+
+				internal TestAgentConfigurationReader BuildConfigurationReader(IApmLogger logger) =>
+					new TestAgentConfigurationReader(logger
+						, flushInterval: FlushInterval.HasValue ? $"{FlushInterval.Value.TotalMilliseconds}ms" : null
+						, maxBatchEventCount: MaxBatchEventCount?.ToString()
+						, maxQueueEventCount: MaxQueueEventCount?.ToString());
+
+				public override string ToString() => new ToStringBuilder("")
+				{
+					{ nameof(ArgsIndex), ArgsIndex },
+					{ nameof(MaxQueueEventCount), MaxQueueEventCount },
+					{ nameof(MaxBatchEventCount), MaxBatchEventCount },
+					{ nameof(FlushInterval), FlushInterval }
+				}.ToString();
 			}
 		}
 	}

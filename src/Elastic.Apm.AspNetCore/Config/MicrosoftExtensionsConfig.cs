@@ -15,14 +15,16 @@ namespace Elastic.Apm.AspNetCore.Config
 		internal const string Origin = "Microsoft.Extensions.Configuration";
 
 		private readonly IConfiguration _configuration;
+		private readonly string _environmentName;
 
 		private readonly Lazy<double> _spanFramesMinDurationInMilliseconds;
 
 		private readonly Lazy<int> _stackTraceLimit;
 
-		public MicrosoftExtensionsConfig(IConfiguration configuration, IApmLogger logger = null) : base(logger)
+		public MicrosoftExtensionsConfig(IConfiguration configuration, IApmLogger logger, string environmentName) : base(logger)
 		{
 			_configuration = configuration;
+			_environmentName = environmentName;
 			_configuration.GetSection("ElasticApm")
 				?
 				.GetReloadToken()
@@ -41,6 +43,7 @@ namespace Elastic.Apm.AspNetCore.Config
 			internal const string CaptureBodyContentTypes = "ElasticApm:CaptureBodyContentTypes";
 			internal const string CaptureHeaders = "ElasticApm:CaptureHeaders";
 			internal const string DiscardEventAge = "ElasticApm:DiscardEventAge";
+			internal const string Environment = "ElasticApm:Environment";
 			internal const string FlushInterval = "ElasticApm:FlushInterval";
 			internal const string LogLevel = "ElasticApm:LogLevel";
 			internal const string LogLevelSubKey = "LogLevel";
@@ -66,6 +69,8 @@ namespace Elastic.Apm.AspNetCore.Config
 		public bool CaptureHeaders => ParseCaptureHeaders(ReadFallBack(Keys.CaptureHeaders, ConfigConsts.EnvVarNames.CaptureHeaders));
 
 		public TimeSpan DiscardEventAge => ParseFlushInterval(ReadFallBack(Keys.DiscardEventAge, ConfigConsts.EnvVarNames.DiscardEventAge));
+
+		public string Environment => ParseEnvironment(ReadFallBack(Keys.Environment, ConfigConsts.EnvVarNames.Environment)) ?? _environmentName;
 
 		public TimeSpan FlushInterval => ParseFlushInterval(ReadFallBack(Keys.FlushInterval, ConfigConsts.EnvVarNames.FlushInterval));
 

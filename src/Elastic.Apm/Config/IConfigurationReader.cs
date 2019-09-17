@@ -10,6 +10,7 @@ namespace Elastic.Apm.Config
 
 		List<string> CaptureBodyContentTypes { get; }
 		bool CaptureHeaders { get; }
+		string Environment { get; }
 
 		/// <summary>
 		/// Events older than this age are discarded when the queue is full and it's necessary to free up space for a new event.
@@ -31,9 +32,12 @@ namespace Elastic.Apm.Config
 		TimeSpan DiscardEventAge { get; }
 
 		/// <summary>
-		/// The maximal amount of time events are held in queue until there is enough to send a batch.
-		/// It's possible for a batch to contain less then <seealso cref="MaxBatchSize" /> events if there are events that need to
-		/// be sent out because they were held for too long.
+		/// The maximal amount of time (in seconds) events are held in queue until there is enough to send a batch.
+		/// It's possible for a batch to contain less then <seealso cref="MaxBatchEventCount" /> events
+		/// if there are events that need to be sent out because they were held for too long.
+		/// A lower value will increase the load on your APM server,
+		/// while a higher value can increase the memory pressure on your app.
+		/// A higher value also impacts the time until transactions are indexed and searchable in Elasticsearch.
 		/// <list type="bullet">
 		/// 	<item>
 		/// 		<description>
@@ -59,8 +63,8 @@ namespace Elastic.Apm.Config
 
 		/// <summary>
 		/// The maximal number of events to send in a batch.
-		/// It's possible for a batch contain less then the maximum events if there are events that need to be sent out because
-		/// they were held for too long.
+		/// It's possible for a batch contain less then the maximum events
+		/// if there are events that need to be sent out because they were held for too long.
 		/// <list type="bullet">
 		/// 	<item>
 		/// 		<description>
@@ -74,16 +78,14 @@ namespace Elastic.Apm.Config
 		/// 	</item>
 		/// </list>
 		/// Default value: <seealso cref="ConfigConsts.DefaultValues.MaxBatchEventCount" />
-		/// Also see: <seealso cref="FlushIntervalInMilliseconds" /> and <seealso cref="MaxQueueEventCount" />
+		/// Also see: <seealso cref="FlushInterval" /> and <seealso cref="MaxQueueEventCount" />
 		/// </summary>
 		int MaxBatchEventCount { get; }
 
 		/// <summary>
 		/// The maximal number of events to hold in queue as candidates to be sent.
-		/// If there's a new event when the queue is at its maximum capacity
-		/// then the agent first tries to free up space in the queue by discarding
-		/// events older than <seealso cref="DiscardEventAge" />
-		/// and then if there's space freed up in the queue then agent enqueues the new element.
+		/// If the queue is at its maximum capacity then the agent discards the new events
+		/// until the queue has free space.
 		/// <list type="bullet">
 		/// 	<item>
 		/// 		<description>

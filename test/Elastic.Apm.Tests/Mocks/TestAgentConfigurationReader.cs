@@ -12,8 +12,8 @@ namespace Elastic.Apm.Tests.Mocks
 		private readonly string _captureBodyContentTypes;
 		private readonly string _captureHeaders;
 		private readonly string _discardEventAge;
+		private readonly string _environment;
 		private readonly string _flushInterval;
-
 		private readonly string _logLevel;
 		private readonly string _maxBatchEventCount;
 		private readonly string _maxQueueEventCount;
@@ -32,6 +32,7 @@ namespace Elastic.Apm.Tests.Mocks
 			string serverUrls = null,
 			string serviceName = null,
 			string serviceVersion = null,
+			string environment = null,
 			string secretToken = null,
 			string captureHeaders = null,
 			string transactionSampleRate = null,
@@ -51,6 +52,7 @@ namespace Elastic.Apm.Tests.Mocks
 			_logLevel = logLevel;
 			_serviceName = serviceName;
 			_serviceVersion = serviceVersion;
+			_environment = environment;
 			_secretToken = secretToken;
 			_captureHeaders = captureHeaders;
 			_transactionSampleRate = transactionSampleRate;
@@ -71,10 +73,11 @@ namespace Elastic.Apm.Tests.Mocks
 			ParseCaptureBodyContentTypes(Kv(ConfigConsts.EnvVarNames.CaptureBodyContentTypes, _captureBodyContentTypes, Origin), CaptureBody);
 
 		public bool CaptureHeaders => ParseCaptureHeaders(Kv(ConfigConsts.EnvVarNames.CaptureHeaders, _captureHeaders, Origin));
+
 		public TimeSpan DiscardEventAge => ParseDiscardEventAge(Kv(ConfigConsts.EnvVarNames.DiscardEventAge, _discardEventAge, Origin));
+		public string Environment => ParseEnvironment(Kv(ConfigConsts.EnvVarNames.Environment, _environment, Origin));
 
 		public TimeSpan FlushInterval => ParseFlushInterval(Kv(ConfigConsts.EnvVarNames.FlushInterval, _flushInterval, Origin));
-
 		public new IApmLogger Logger { get; }
 		public LogLevel LogLevel => ParseLogLevel(Kv(ConfigConsts.EnvVarNames.LogLevel, _logLevel, Origin));
 		public int MaxBatchEventCount => ParseMaxBatchEventCount(Kv(ConfigConsts.EnvVarNames.MaxBatchEventCount, _maxBatchEventCount, Origin));

@@ -15,6 +15,9 @@ namespace Elastic.Apm.Config
 	{
 		private readonly LazyContextualInit<IReadOnlyList<Uri>> _cachedServerUrls = new LazyContextualInit<IReadOnlyList<Uri>>();
 
+		private readonly LazyContextualInit<int> _cachedMaxBatchEventCount = new LazyContextualInit<int>();
+		private readonly LazyContextualInit<int> _cachedMaxQueueEventCount = new LazyContextualInit<int>();
+
 		protected AbstractConfigurationReader(IApmLogger logger) => ScopedLogger = logger?.Scoped(GetType().Name);
 
 		protected IApmLogger Logger => ScopedLogger;
@@ -273,10 +276,12 @@ namespace Elastic.Apm.Config
 		}
 
 		protected int ParseMaxBatchEventCount(ConfigurationKeyValue kv) =>
-			ParseMaxXyzEventCount(kv, DefaultValues.MaxBatchEventCount, "MaxBatchEventCount");
+			_cachedMaxBatchEventCount.IfNotInited?.InitOrGet(() => ParseMaxXyzEventCount(kv, DefaultValues.MaxBatchEventCount, "MaxBatchEventCount"))
+			?? _cachedMaxBatchEventCount.Value;
 
 		protected int ParseMaxQueueEventCount(ConfigurationKeyValue kv) =>
-			ParseMaxXyzEventCount(kv, DefaultValues.MaxQueueEventCount, "MaxQueueEventCount");
+			_cachedMaxQueueEventCount.IfNotInited?.InitOrGet(() => ParseMaxXyzEventCount(kv, DefaultValues.MaxQueueEventCount, "MaxQueueEventCount"))
+			?? _cachedMaxQueueEventCount.Value;
 
 		protected TimeSpan ParseFlushInterval(ConfigurationKeyValue kv) =>
 			ParsePositiveOrZeroTimeIntervalInMillisecondsImpl(kv, TimeSuffix.S, TimeSpan.FromMilliseconds(DefaultValues.FlushIntervalInMilliseconds),
@@ -486,6 +491,13 @@ namespace Elastic.Apm.Config
 			Logger?.Warning()?.Log("Failed to discover service version, the service version will be omitted.");
 
 			return null;
+		}
+
+		protected string ParseEnvironment(ConfigurationKeyValue kv)
+		{
+			if (kv == null || string.IsNullOrEmpty(kv.Value)) return null;
+
+			return kv.Value;
 		}
 
 		private static bool TryParseFloatingPoint(string valueAsString, out double result) =>

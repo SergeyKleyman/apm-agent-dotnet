@@ -32,6 +32,7 @@ namespace Elastic.Apm.Tests
 			public string CaptureBody { get; }
 			public List<string> CaptureBodyContentTypes { get; }
 			public bool CaptureHeaders { get; }
+			public string Environment { get; }
 			public TimeSpan FlushInterval => TimeSpan.FromMilliseconds(ConfigConsts.DefaultValues.FlushIntervalInMilliseconds);
 			public TimeSpan DiscardEventAge => TimeSpan.FromMilliseconds(ConfigConsts.DefaultValues.DiscardEventAgeInMilliseconds);
 			public LogLevel LogLevel { get; }
@@ -44,7 +45,6 @@ namespace Elastic.Apm.Tests
 			public string ServiceVersion { get; }
 			public double SpanFramesMinDurationInMilliseconds { get; }
 			public int StackTraceLimit { get; }
-
 			public double TransactionSampleRate { get; }
 			// ReSharper restore UnassignedGetOnlyAutoProperty
 		}
