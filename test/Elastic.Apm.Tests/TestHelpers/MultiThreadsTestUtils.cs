@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using Elastic.Apm.Tests.Extensions;
+using Elastic.Apm.Helpers;
 using FluentAssertions;
 
 namespace Elastic.Apm.Tests.TestHelpers
@@ -18,7 +18,7 @@ namespace Elastic.Apm.Tests.TestHelpers
 		{
 			numberOfThreads.Should().BeGreaterThan(1);
 
-			var startBarrier = new Barrier(numberOfThreads);
+			using var startBarrier = new Barrier(numberOfThreads);
 			var results = new TResult[numberOfThreads];
 			var exceptions = new Exception[numberOfThreads];
 			var threads = Enumerable.Range(0, numberOfThreads).Select(i => new Thread(() => EachThreadDo(i))).ToList();
@@ -26,17 +26,23 @@ namespace Elastic.Apm.Tests.TestHelpers
 			foreach (var thread in threads) thread.Start();
 			foreach (var thread in threads) thread.Join();
 
-			// ReSharper disable once ImplicitlyCapturedClosure
-			exceptions.ForEachIndexed((ex, threadIndex) =>
+			var threadWithExceptionIndexes =
+				exceptions.ZipWithIndex().Where(indexAndEx => indexAndEx.Item2 != null).Select(indexAndEx => indexAndEx.Item1).ToArray();
+
+			if (! threadWithExceptionIndexes.IsEmpty())
 			{
-				if (ex != null)
-					throw new AggregateException($"Exception was thrown out of thread's (threadIndex: {threadIndex}) action", ex);
-			});
+				throw new AggregateException("Exception was thrown out of at least one thread's action."
+					+ $" Number of threads that thrown exceptions: {threadWithExceptionIndexes.Length}, "
+					+ $" their indexes: {string.Join(", ", threadWithExceptionIndexes)}."
+					+ $" Total number of threads: {numberOfThreads}."
+					, exceptions.Where(ex => ex != null));
+			}
 
 			return results;
 
 			void EachThreadDo(int threadIndex)
 			{
+				// ReSharper disable once AccessToDisposedClosure
 				startBarrier.SignalAndWait();
 
 				try

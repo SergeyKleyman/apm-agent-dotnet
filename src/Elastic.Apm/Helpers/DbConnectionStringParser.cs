@@ -7,18 +7,76 @@ using Elastic.Apm.Logging;
 
 namespace Elastic.Apm.Helpers
 {
-	internal class DbConnectionStringParser
+	public class DbConnectionStringParser
 	{
 		private const string ThisClassName = nameof(DbConnectionStringParser);
 		internal const int MaxCacheSize = 100;
 
 		private readonly IApmLogger _logger;
-		private readonly ThreadLocal<Dictionary<string, Destination>> _cache =
-			new ThreadLocal<Dictionary<string, Destination>>(() => new Dictionary<string, Destination>());
+		private readonly ICache _cache;
+
+		internal interface ICache
+		{
+			bool TryGetValue(string connectionString, out Destination destination);
+			void Add(string connectionString, Destination destination);
+		}
+
+		public class ThreadLocalCache : ICache
+		{
+			private readonly ThreadLocal<Dictionary<string, Destination>> _dict =
+				new ThreadLocal<Dictionary<string, Destination>>(() => new Dictionary<string, Destination>());
+
+			private readonly Strategy _strategy;
+
+			public enum Strategy
+			{
+				FirstMax,
+				ResetWhenMax
+			}
+
+			internal ThreadLocalCache(Strategy strategy)
+			{
+				_strategy = strategy;
+			}
+
+			public bool TryGetValue(string connectionString, out Destination destination) =>
+				_dict.Value.TryGetValue(connectionString, out destination);
+
+			public void Add(string connectionString, Destination destination)
+			{
+				var dict = _dict.Value;
+				if (dict.Count < MaxCacheSize)
+				{
+					dict.Add(connectionString, destination);
+					return;
+				}
+
+				switch (_strategy)
+				{
+					case Strategy.FirstMax:
+						return;
+
+					case Strategy.ResetWhenMax:
+						dict.Clear();
+						dict.Add(connectionString, destination);
+						return;
+
+					default: throw new ArgumentOutOfRangeException();
+				}
+			}
+		}
 
 		internal DbConnectionStringParser(IApmLogger logger)
+			: this(logger, new ThreadLocalCache(ThreadLocalCache.Strategy.FirstMax))
+		{ }
+
+		/// <summary>
+		/// Used only by tests.
+		/// </summary>
+		internal DbConnectionStringParser(IApmLogger logger, ICache cache)
 		{
 			_logger = logger.Scoped(ThisClassName);
+			_cache = cache;
 		}
 
 		/// <returns><c>Destination</c> if successful and <c>null</c> otherwise</returns>
@@ -29,8 +87,7 @@ namespace Elastic.Apm.Helpers
 		/// </summary>
 		internal Destination ExtractDestination(string dbConnectionString, out bool wasFoundInCache)
 		{
-			var cache = _cache.Value;
-			if (cache.TryGetValue(dbConnectionString, out var destination))
+			if (_cache.TryGetValue(dbConnectionString, out var destination))
 			{
 				wasFoundInCache = true;
 				return destination;
@@ -38,7 +95,7 @@ namespace Elastic.Apm.Helpers
 
 			wasFoundInCache = false;
 			destination = ParseConnectionString(dbConnectionString);
-			if (cache.Count < MaxCacheSize) cache.Add(dbConnectionString, destination);
+			_cache.Add(dbConnectionString, destination);
 			return destination;
 		}
 
@@ -201,8 +258,6 @@ namespace Elastic.Apm.Helpers
 
 			destination.Address = ParseAddress(valueToParse.Substring(0, lastColumnIndex));
 			ParsePortValue(valueToParse.Substring(lastColumnIndex + 1), destination);
-			return;
-
 		}
 
 		private static string ParseAddress(string valueToParseArg)

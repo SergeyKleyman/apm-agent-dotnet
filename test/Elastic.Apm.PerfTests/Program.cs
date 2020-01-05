@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Diagnostics;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.ConsoleArguments;
+using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using Elastic.Apm.DistributedTracing;
 using Elastic.Apm.Helpers;
@@ -14,7 +17,8 @@ namespace Elastic.Apm.PerfTests
 	[MemoryDiagnoser]
 	public class Program
 	{
-		public static void Main(string[] args) => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+		public static void Main(string[] args) => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args
+			, DefaultConfig.Instance.With(SummaryStyle.Default.WithMaxParameterColumnWidth(40)));
 
 
 		private string str;
